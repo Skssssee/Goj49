@@ -3,15 +3,18 @@ from pyrogram import filters
 from TEAMZYRO import ZYRO as bot
 from TEAMZYRO import user_collection
 
+# ─── CONFIG ─────────────────────────────────────────
 HOURLY_COINS = 100
 DAILY_COINS = 500
 
 HOURLY_CD = timedelta(hours=1)
 DAILY_CD = timedelta(hours=24)
 
-ADMIN_IDS = [123456789]  # CHANGE THIS
+# 🔒 PERMANENT ADMIN
+ADMIN_IDS = [1334658171]
 
 
+# ─── GET OR CREATE USER ─────────────────────────────
 async def get_user(user):
     data = await user_collection.find_one({"id": user.id})
     if not data:
@@ -51,16 +54,23 @@ async def hourly_cmd(_, message):
         remaining = HOURLY_CD - (now - user["last_hourly"])
         if remaining.total_seconds() > 0:
             m, s = divmod(int(remaining.total_seconds()), 60)
-            return await message.reply_text(f"⏳ Try again in `{m}m {s}s`")
+            return await message.reply_text(
+                f"⏳ Try again in `{m}m {s}s`"
+            )
 
     reward = HOURLY_COINS * (2 if user.get("vip") else 1)
 
     await user_collection.update_one(
         {"id": user["id"]},
-        {"$inc": {"coins": reward}, "$set": {"last_hourly": now}}
+        {
+            "$inc": {"coins": reward},
+            "$set": {"last_hourly": now}
+        }
     )
 
-    await message.reply_text(f"🪙 You received **{reward} coins** (Hourly)")
+    await message.reply_text(
+        f"🪙 You received **{reward} coins** (Hourly)"
+    )
 
 
 # ─── DAILY + STREAK ─────────────────────────────────
@@ -73,7 +83,9 @@ async def daily_cmd(_, message):
         diff = now - user["last_daily"]
         if diff < DAILY_CD:
             h = int((DAILY_CD - diff).total_seconds() // 3600)
-            return await message.reply_text(f"⏳ Come back in `{h}h`")
+            return await message.reply_text(
+                f"⏳ Come back in `{h}h`"
+            )
 
         if diff > timedelta(hours=48):
             streak = 1
@@ -109,7 +121,9 @@ async def daily_cmd(_, message):
 @bot.on_message(filters.command("addcoins") & filters.user(ADMIN_IDS))
 async def addcoins_cmd(_, message):
     if len(message.command) < 3:
-        return await message.reply_text("/addcoins user_id amount")
+        return await message.reply_text(
+            "Usage:\n/addcoins user_id amount"
+        )
 
     uid = int(message.command[1])
     amt = int(message.command[2])
@@ -120,14 +134,18 @@ async def addcoins_cmd(_, message):
         upsert=True
     )
 
-    await message.reply_text(f"✅ Added `{amt}` coins to `{uid}`")
+    await message.reply_text(
+        f"✅ Added `{amt}` coins to `{uid}`"
+    )
 
 
 # ─── ADMIN: REMOVE COINS ────────────────────────────
 @bot.on_message(filters.command("removecoins") & filters.user(ADMIN_IDS))
 async def removecoins_cmd(_, message):
     if len(message.command) < 3:
-        return await message.reply_text("/removecoins user_id amount")
+        return await message.reply_text(
+            "Usage:\n/removecoins user_id amount"
+        )
 
     uid = int(message.command[1])
     amt = int(message.command[2])
@@ -137,4 +155,6 @@ async def removecoins_cmd(_, message):
         {"$inc": {"coins": -amt}}
     )
 
-    await message.reply_text(f"❌ Removed `{amt}` coins from `{uid}`")
+    await message.reply_text(
+        f"❌ Removed `{amt}` coins from `{uid}`"
+    )
