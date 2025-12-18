@@ -1,3 +1,4 @@
+import asyncio
 import random
 from datetime import datetime, timedelta
 
@@ -26,23 +27,13 @@ RARITY_SUCCESS = {
 # ─────────────────────────────
 
 def roll_rarity():
-    r = random.randint(1, 100)
-    if r <= 40:
+    roll = random.randint(1, 100)
+    if roll <= 40:
         return "Low"
-    elif r <= 70:
+    elif roll <= 70:
         return "Medium"
-    return "High"
-
-
-def success_title(action: str, rarity: str) -> str:
-    """
-    🔔 sound emoji for all
-    ✨ glow only for Medium & High
-    """
-    base = f"{action.upper()} SUCCESSFUL"
-    if rarity in ("Medium", "High"):
-        base = f"✨✨✨ {base} ✨✨✨"
-    return f"🔔 {base}"
+    else:
+        return "High"
 
 
 # ─────────────────────────────
@@ -60,7 +51,8 @@ async def send_preview(message, mode):
             "characters": [],
             "harem": [],
             "last_smash_time": None,
-            "last_propose_time": None
+            "last_propose_time": None,
+            "smash_streak": 0
         }
         await user_collection.insert_one(user)
 
@@ -73,6 +65,9 @@ async def send_preview(message, mode):
         return await message.reply_text(
             f"⏳ Wait `{m}m {s}s` before using /{mode} again."
         )
+
+    await bot.send_dice(message.chat.id, "🎲")
+    await asyncio.sleep(2)
 
     rolled_rarity = roll_rarity()
 
@@ -147,48 +142,60 @@ async def confirm_action(_, cq: CallbackQuery):
     # ❌ FAILURE
     if not success:
         if mode == "smash":
-            fail_text = (
+            text = (
                 "❌ **Smash Failed!**\n\n"
-                "⚔️ The challenger resisted.\n"
-                "💨 The opportunity slipped away…"
+                "⚔️ The character resisted.\n"
+                "💨 Try again later."
             )
         else:
-            fail_text = (
-                "💔 **Propose Failed!**\n\n"
-                "✨ The character was not convinced.\n"
-                "🍀 Better luck next time."
+            text = (
+                "💔 **Proposal Failed**\n\n"
+                "✨ The character wasn’t convinced."
             )
-
-        await cq.message.edit_caption(fail_text)
+        await cq.message.edit_caption(text)
         await cq.answer()
         return
 
     # ✅ SUCCESS
-    title = success_title(mode, rarity)
-
     if mode == "smash":
-        update = {
-            "$push": {"characters": char},
-            "$set": {"last_smash_time": now}
-        }
+        user = await user_collection.find_one({"id": user_id})
+        streak = user.get("smash_streak", 0) + 1
+
+        await user_collection.update_one(
+            {"id": user_id},
+            {
+                "$push": {"characters": char},
+                "$set": {
+                    "last_smash_time": now,
+                    "smash_streak": streak
+                }
+            },
+            upsert=True
+        )
+
+        caption = (
+            f"✨ **{char['name']}** has been smashed into submission!\n\n"
+            f"• Added to your collection\n"
+            f"• Power Level: 🔮 `{rarity}`\n\n"
+            f"🔥 **Current Streak:** `{streak}`"
+        )
+
     else:
-        update = {
-            "$push": {"harem": char},
-            "$set": {"last_propose_time": now}
-        }
+        await user_collection.update_one(
+            {"id": user_id},
+            {
+                "$push": {"harem": char},
+                "$set": {"last_propose_time": now}
+            },
+            upsert=True
+        )
 
-    caption = (
-        f"{title}\n\n"
-        f"👤 **Name:** `{char.get('name')}`\n"
-        f"🆔 **ID:** `{char.get('id','N/A')}`\n"
-        f"⭐ **Rarity:** `{rarity}`\n"
-        f"📺 **Anime:** `{char.get('anime')}`"
-    )
+        caption = (
+            f"💫 **{char['name']}'s** eyes sparkled as they took your hand…\n"
+            f"*\"I accept your heart\"* 💞\n\n"
+            f"💞 **{char['name']}** has been added to your harem!"
+        )
 
-    if mode == "propose":
-        caption += "\n\n✨ Added to your harem!"
-
-    await user_collection.update_one({"id": user_id}, update, upsert=True)
     await cq.message.edit_caption(caption)
     await cq.answer("✅ Success!")
 
