@@ -1,84 +1,111 @@
-from pyrogram import filters
+from pyrogram import Client, filters
 from pyrogram.types import Message
 import html
+
 from TEAMZYRO import app, user_collection
 
-# ─── GET OR CREATE USER ─────────────────────────────
-async def get_user(user):
-    data = await user_collection.find_one({"id": user.id})
 
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
+
+async def get_or_create_user(user):
+    data = await user_collection.find_one({"id": user.id})
     if not data:
         data = {
             "id": user.id,
             "first_name": user.first_name,
             "username": user.username,
             "balance": 0,
-            "tokens": 0,
-            "characters": []
+            "tokens": 0
         }
         await user_collection.insert_one(data)
-
-    # Auto-fix missing fields
-    updates = {}
-    if "balance" not in data:
-        updates["balance"] = 0
-    if "tokens" not in data:
-        updates["tokens"] = 0
-
-    if updates:
-        await user_collection.update_one({"id": user.id}, {"$set": updates})
-        data.update(updates)
-
     return data
 
 
-# ─── BALANCE COMMAND ────────────────────────────────
+async def username_to_id(client: Client, username: str):
+    username = username.lstrip("@")
+    try:
+        user = await client.get_users(username)
+        return user.id, user.first_name
+    except Exception:
+        return None, None
+
+
+# ─────────────────────────────────────────────
+# /balance
+# ─────────────────────────────────────────────
+
 @app.on_message(filters.command("balance"))
-async def balance_cmd(_, message: Message):
-    user = await get_user(message.from_user)
+async def balance_cmd(client: Client, message: Message):
+    user = await get_or_create_user(message.from_user)
+
+    coins = user.get("balance", 0)
+    tokens = user.get("tokens", 0)
 
     await message.reply_text(
-        f"💳 **{html.escape(message.from_user.first_name)}'s Balance**\n\n"
-        f"🪙 Coins: `{user['balance']}`\n"
-        f"🪙 Tokens: `{user['tokens']}`"
+        f"👤 {html.escape(message.from_user.first_name)}\n\n"
+        f"💰 Coins: `{coins}`\n"
+        f"🪙 Tokens: `{tokens}`"
     )
 
 
-# ─── PAY COMMAND ────────────────────────────────────
+# ─────────────────────────────────────────────
+# /pay
+# ─────────────────────────────────────────────
+
 @app.on_message(filters.command("pay"))
-async def pay_cmd(_, message: Message):
-    sender = await get_user(message.from_user)
+async def pay_cmd(client: Client, message: Message):
     args = message.command
 
     if len(args) < 2:
         return await message.reply_text(
-            "❌ Usage:\n`/pay amount` (reply to user)\n`/pay amount user_id`"
+            "❌ Usage:\n"
+            "`/pay amount @username`\n"
+            "or reply to a user"
         )
 
+    # Validate amount
     try:
         amount = int(args[1])
         if amount <= 0:
             raise ValueError
     except ValueError:
-        return await message.reply_text("❌ Amount must be a positive number.")
+        return await message.reply_text("❌ Invalid amount.")
 
-    # Get receiver
-    if message.reply_to_message:
-        receiver_id = message.reply_to_message.from_user.id
-        receiver_name = message.reply_to_message.from_user.first_name
-    elif len(args) >= 3:
-        receiver_id = int(args[2])
-        receiver_name = "User"
-    else:
-        return await message.reply_text("❌ Reply to a user or provide user ID.")
+    sender = await get_or_create_user(message.from_user)
+    sender_balance = sender.get("balance", 0)
 
-    if receiver_id == sender["id"]:
-        return await message.reply_text("❌ You cannot pay yourself.")
-
-    if sender["balance"] < amount:
+    if sender_balance < amount:
         return await message.reply_text("❌ Insufficient balance.")
 
-    # Transfer coins
+    # ─── GET RECEIVER ─────────────────────────
+    if message.reply_to_message:
+        receiver_user = message.reply_to_message.from_user
+        receiver_id = receiver_user.id
+        receiver_name = receiver_user.first_name
+    elif len(args) >= 3:
+        receiver_id, receiver_name = await username_to_id(client, args[2])
+        if not receiver_id:
+            return await message.reply_text("❌ User not found.")
+    else:
+        return await message.reply_text("❌ Specify a user or reply.")
+
+    # Prevent self-pay
+    if receiver_id == message.from_user.id:
+        return await message.reply_text("❌ You cannot pay yourself.")
+
+    # Ensure receiver exists
+    receiver = await user_collection.find_one({"id": receiver_id})
+    if not receiver:
+        await user_collection.insert_one({
+            "id": receiver_id,
+            "first_name": receiver_name,
+            "balance": 0,
+            "tokens": 0
+        })
+
+    # ─── UPDATE BALANCES ──────────────────────
     await user_collection.update_one(
         {"id": sender["id"]},
         {"$inc": {"balance": -amount}}
@@ -86,25 +113,21 @@ async def pay_cmd(_, message: Message):
 
     await user_collection.update_one(
         {"id": receiver_id},
-        {
-            "$inc": {"balance": amount},
-            "$setOnInsert": {
-                "id": receiver_id,
-                "balance": 0,
-                "tokens": 0,
-                "characters": []
-            }
-        },
-        upsert=True
+        {"$inc": {"balance": amount}}
     )
 
     await message.reply_text(
-        f"✅ **Payment Successful**\n\n"
-        f"💸 Sent `{amount}` coins to **{html.escape(receiver_name)}**\n"
-        f"💰 Remaining Balance: `{sender['balance'] - amount}`"
+        f"✅ You paid **{amount} coins** to "
+        f"<a href='tg://user?id={receiver_id}'>{html.escape(receiver_name)}</a>.",
+        parse_mode="html"
     )
 
-    await app.send_message(
-        receiver_id,
-        f"🎉 You received `{amount}` coins from **{html.escape(message.from_user.first_name)}**"
-    )
+    try:
+        await client.send_message(
+            receiver_id,
+            f"🎉 You received **{amount} coins** from "
+            f"{html.escape(message.from_user.first_name)}.",
+            parse_mode="html"
+        )
+    except Exception:
+        pass
