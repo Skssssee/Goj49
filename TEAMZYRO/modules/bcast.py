@@ -1,85 +1,95 @@
 import asyncio
 from pyrogram import filters
-from pyrogram.errors import PeerIdInvalid, FloodWait
-from TEAMZYRO import user_collection, app, top_global_groups_collection, require_power
+from pyrogram.errors import PeerIdInvalid, FloodWait, ChatWriteForbidden
+from TEAMZYRO import app, user_collection, top_global_groups_collection, require_power
+
 
 @app.on_message(filters.command("bcast"))
 @require_power("bcast")
 async def broadcast(_, message):
-    replied_message = message.reply_to_message
-    if not replied_message:
-        await message.reply_text("❌ Please reply to a message to broadcast it.")
-        return
+    if not message.reply_to_message:
+        return await message.reply_text("❌ Reply to a message to broadcast.")
 
-    # Send initial progress message
-    progress_message = await message.reply_text("📢 Starting the broadcast. Forwarding the message to all users and groups...")
+    source_msg = message.reply_to_message
+    progress = await message.reply_text("📢 Broadcast started...")
 
-    success_count = 0
-    fail_count = 0
-    message_count = 0
     user_success = 0
     group_success = 0
-    
-    # Function to forward the message
-    async def forward_message(target_id):
-        nonlocal success_count, fail_count, message_count
+    failed = 0
+    sent_count = 0
+
+    # ─────────────────────────────
+    # SAFE SEND FUNCTION
+    # ─────────────────────────────
+    async def send_to(chat_id):
+        nonlocal failed, sent_count
         try:
-            await replied_message.forward(target_id)
-            success_count += 1
-            message_count += 1
-        except PeerIdInvalid:
-            fail_count += 1
+            await source_msg.copy(chat_id)
+            sent_count += 1
+            return True
         except FloodWait as e:
             await asyncio.sleep(e.value)
-            await forward_message(target_id)  # Retry after waiting
+            return await send_to(chat_id)
+        except (PeerIdInvalid, ChatWriteForbidden):
+            failed += 1
+            return False
         except Exception as e:
-            print(f"Error forwarding to {target_id}: {e}")
-            fail_count += 1
+            print(f"[BCAST ERROR] {chat_id}: {e}")
+            failed += 1
+            return False
+        finally:
+            if sent_count % 7 == 0:
+                await asyncio.sleep(2)
 
-        # Introduce a delay after every 7 messages
-        if message_count % 7 == 0:
-            await asyncio.sleep(2)
+    # ─────────────────────────────
+    # BROADCAST TO USERS
+    # ─────────────────────────────
+    async for user in user_collection.find({}, {"id": 1}):
+        uid = user.get("id")
+        if not uid:
+            continue
 
-    # Function to update progress
-    async def update_progress():
-        await progress_message.edit_text(
-            f"📢 Broadcast in progress...\n"
-            f"✅ Users sent: {user_success}\n"
-            f"✅ Groups sent: {group_success}\n"
-            f"❌ Failed attempts: {fail_count}"
-        )
-
-    # Forward to users
-    user_cursor = user_collection.find({})
-    
-    async for user in user_cursor:
-        user_id = user.get('id')
-        if user_id:
-            await forward_message(user_id)
+        ok = await send_to(uid)
+        if ok:
             user_success += 1
 
-            # Update progress every 100 users
-            if user_success % 100 == 0:
-                await update_progress()
+        if user_success % 100 == 0:
+            await progress.edit_text(
+                f"📢 Broadcasting...\n\n"
+                f"👤 Users: {user_success}\n"
+                f"👥 Groups: {group_success}\n"
+                f"❌ Failed: {failed}"
+            )
 
-    # Forward to groups
-    group_cursor = top_global_groups_collection.find({})
-    unique_group_ids = set()
-    async for group in group_cursor:
-        group_id = group.get('group_id')
-        if group_id and group_id not in unique_group_ids:
-            unique_group_ids.add(group_id)
-            await forward_message(group_id)
+    # ─────────────────────────────
+    # BROADCAST TO GROUPS
+    # ─────────────────────────────
+    group_ids = set()
+
+    async for grp in top_global_groups_collection.find({}, {"group_id": 1}):
+        gid = grp.get("group_id")
+        if not gid or gid in group_ids:
+            continue
+
+        group_ids.add(gid)
+        ok = await send_to(gid)
+        if ok:
             group_success += 1
 
-            # Update progress every 100 groups
-            if group_success % 100 == 0:
-                await update_progress()
+        if group_success % 50 == 0:
+            await progress.edit_text(
+                f"📢 Broadcasting...\n\n"
+                f"👤 Users: {user_success}\n"
+                f"👥 Groups: {group_success}\n"
+                f"❌ Failed: {failed}"
+            )
 
-    # Final report
-    await progress_message.edit_text(
-        f"✅ Broadcast completed!\n"
-        f"✅ Users sent: {user_success}\n"
-        f"✅ Groups sent: {group_success}\n"
-        f"❌ Failed attempts: {fail_count}"
+    # ─────────────────────────────
+    # FINAL REPORT
+    # ─────────────────────────────
+    await progress.edit_text(
+        f"✅ Broadcast Completed!\n\n"
+        f"👤 Users sent: {user_success}\n"
+        f"👥 Groups sent: {group_success}\n"
+        f"❌ Failed: {failed}"
     )
