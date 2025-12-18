@@ -1,156 +1,225 @@
-# economy.py
 
-from datetime import datetime, timedelta
+import time
+import html
 from pyrogram import filters
+from pyrogram.types import Message
+from pyrogram.enums import ParseMode
+
 from TEAMZYRO import app, user_collection
 
-# ─── CONFIG ─────────────────────────────────────────
-HOURLY_COINS = 100
-DAILY_COINS = 500
+# ─────────────────────────────────
+# CONFIG
+# ─────────────────────────────────
+BALANCE_GIVER_ID = 1334658171  # ONLY this user can add balance
 
-HOURLY_CD = timedelta(hours=1)
-DAILY_CD = timedelta(hours=24)
+HOURLY_AMOUNT = 50
+DAILY_AMOUNT = 200
 
-# 🔒 PERMANENT ADMIN
-ADMIN_IDS = [1334658171]
+HOURLY_COOLDOWN = 3600       # 1 hour
+DAILY_COOLDOWN = 86400      # 24 hours
 
 
-# ─── GET OR CREATE USER (SAFE) ──────────────────────
-async def get_user(user):
+# ─────────────────────────────────
+# ENSURE USER (AUTO FIX OLD USERS)
+# ─────────────────────────────────
+async def ensure_user(user):
     data = await user_collection.find_one({"id": user.id})
 
     if not data:
         data = {
             "id": user.id,
-            "first_name": user.first_name,
             "username": user.username,
-            "coins": 0,
+            "first_name": user.first_name,
+            "balance": 0,
             "tokens": 0,
-            "last_hourly": None,
-            "last_daily": None,
-            "daily_streak": 0,
-            "vip": False,
-            "characters": []
+            "characters": [],
+            "last_hourly": 0,
+            "last_daily": 0
         }
         await user_collection.insert_one(data)
         return data
 
-    # Auto-fix missing fields
     updates = {}
-    defaults = {
-        "coins": 0,
+    for key, default in {
+        "balance": 0,
         "tokens": 0,
-        "last_hourly": None,
-        "last_daily": None,
-        "daily_streak": 0,
-        "vip": False,
-        "characters": []
-    }
+        "characters": [],
+        "last_hourly": 0,
+        "last_daily": 0
+    }.items():
+        if key not in data:
+            updates[key] = default
 
-    for k, v in defaults.items():
-        if k not in data:
-            updates[k] = v
+    if data.get("first_name") != user.first_name:
+        updates["first_name"] = user.first_name
+    if data.get("username") != user.username:
+        updates["username"] = user.username
 
     if updates:
-        await user_collection.update_one({"id": user.id}, {"$set": updates})
+        await user_collection.update_one(
+            {"id": user.id},
+            {"$set": updates}
+        )
         data.update(updates)
 
     return data
 
 
-# ─── BALANCE ─────────────────────────────────────────
+# ─────────────────────────────────
+# BALANCE
+# ─────────────────────────────────
 @app.on_message(filters.command("balance"))
-async def balance_cmd(_, message):
-    user = await get_user(message.from_user)
+async def balance_cmd(_, message: Message):
+    user = await ensure_user(message.from_user)
 
     await message.reply_text(
-        f"💳 **{message.from_user.first_name}'s Balance**\n\n"
-        f"💰 Coins: `{user.get('coins', 0)}`\n"
-        f"🪙 Tokens: `{user.get('tokens', 0)}`"
+        f"💰 <b>{html.escape(message.from_user.first_name)}'s Balance</b>\n\n"
+        f"🪙 Coins: <b>{user['balance']}</b>\n"
+        f"🎟 Tokens: <b>{user['tokens']}</b>",
+        parse_mode=ParseMode.HTML
     )
 
 
-# ─── HOURLY ──────────────────────────────────────────
-@app.on_message(filters.command("hourly"))
-async def hourly_cmd(_, message):
-    user = await get_user(message.from_user)
-    now = datetime.utcnow()
+# ─────────────────────────────────
+# ADD BALANCE (SPECIFIC USER ONLY)
+# ─────────────────────────────────
+@app.on_message(filters.command("addbal"))
+async def add_balance(_, message: Message):
+    if message.from_user.id != BALANCE_GIVER_ID:
+        return await message.reply_text("❌ You are not allowed to give balance.")
 
-    if user["last_hourly"]:
-        remaining = HOURLY_CD - (now - user["last_hourly"])
-        if remaining.total_seconds() > 0:
-            m, s = divmod(int(remaining.total_seconds()), 60)
-            return await message.reply_text(f"⏳ Try again in `{m}m {s}s`")
+    parts = message.text.split()
+    amount = None
+    target_id = None
 
-    reward = HOURLY_COINS * (2 if user["vip"] else 1)
+    for p in parts:
+        if p.isdigit():
+            amount = int(p)
+        elif p.startswith("@"):
+            user = await user_collection.find_one({"username": p[1:]})
+            if user:
+                target_id = user["id"]
+
+    if not amount or not target_id:
+        return await message.reply_text(
+            "❌ Usage:\n"
+            "/addbal <amount> @username\n"
+            "/addbal @username <amount>"
+        )
 
     await user_collection.update_one(
-        {"id": user["id"]},
-        {"$inc": {"coins": reward}, "$set": {"last_hourly": now}}
+        {"id": target_id},
+        {"$inc": {"balance": amount}},
+        upsert=True
     )
 
-    await message.reply_text(f"🪙 You received **{reward} coins**")
+    await message.reply_text(
+        f"✅ Added <b>{amount}</b> coins successfully.",
+        parse_mode=ParseMode.HTML
+    )
 
 
-# ─── DAILY ──────────────────────────────────────────
-@app.on_message(filters.command("daily"))
-async def daily_cmd(_, message):
-    user = await get_user(message.from_user)
-    now = datetime.utcnow()
+# ─────────────────────────────────
+# PAY
+# ─────────────────────────────────
+@app.on_message(filters.command("pay"))
+async def pay_cmd(_, message: Message):
+    sender = await ensure_user(message.from_user)
+    parts = message.text.split()
 
-    if user["last_daily"]:
-        diff = now - user["last_daily"]
-        if diff < DAILY_CD:
-            h = int((DAILY_CD - diff).total_seconds() // 3600)
-            return await message.reply_text(f"⏳ Come back in `{h}h`")
+    amount = None
+    receiver_id = None
 
-        streak = 1 if diff > timedelta(hours=48) else user["daily_streak"] + 1
+    if message.reply_to_message:
+        receiver_id = message.reply_to_message.from_user.id
+        for p in parts:
+            if p.isdigit():
+                amount = int(p)
     else:
-        streak = 1
+        for p in parts:
+            if p.isdigit():
+                amount = int(p)
+            elif p.startswith("@"):
+                user = await user_collection.find_one({"username": p[1:]})
+                if user:
+                    receiver_id = user["id"]
 
-    bonus = min(streak * 50, 500)
-    reward = DAILY_COINS + bonus
-    if user["vip"]:
-        reward *= 2
+    if not amount or not receiver_id:
+        return await message.reply_text(
+            "❌ Usage:\n"
+            "/pay <amount> @username\n"
+            "/pay @username <amount>"
+        )
+
+    if sender["balance"] < amount:
+        return await message.reply_text("❌ Insufficient balance.")
+
+    await user_collection.update_one(
+        {"id": sender["id"]},
+        {"$inc": {"balance": -amount}}
+    )
+
+    await user_collection.update_one(
+        {"id": receiver_id},
+        {"$inc": {"balance": amount}},
+        upsert=True
+    )
+
+    await message.reply_text(
+        f"✅ Paid <b>{amount}</b> coins successfully.",
+        parse_mode=ParseMode.HTML
+    )
+
+
+# ─────────────────────────────────
+# HOURLY
+# ─────────────────────────────────
+@app.on_message(filters.command("hourly"))
+async def hourly_cmd(_, message: Message):
+    user = await ensure_user(message.from_user)
+
+    now = int(time.time())
+    if now - user["last_hourly"] < HOURLY_COOLDOWN:
+        wait = HOURLY_COOLDOWN - (now - user["last_hourly"])
+        return await message.reply_text(
+            f"⏳ Come back in {wait // 60} minutes."
+        )
 
     await user_collection.update_one(
         {"id": user["id"]},
         {
-            "$set": {"last_daily": now, "daily_streak": streak},
-            "$inc": {"coins": reward}
+            "$inc": {"balance": HOURLY_AMOUNT},
+            "$set": {"last_hourly": now}
         }
     )
 
     await message.reply_text(
-        f"🌞 **Daily Claimed!**\n"
-        f"🪙 Coins: `{reward}`\n"
-        f"🔥 Streak: `{streak}`"
+        f"✅ Hourly reward claimed!\n💰 +{HOURLY_AMOUNT} coins"
     )
 
 
-# ─── ADMIN COMMANDS ─────────────────────────────────
-@app.on_message(filters.command("addcoins") & filters.user(ADMIN_IDS))
-async def addcoins(_, message):
-    uid = int(message.command[1])
-    amt = int(message.command[2])
+# ─────────────────────────────────
+# DAILY
+# ─────────────────────────────────
+@app.on_message(filters.command("daily"))
+async def daily_cmd(_, message: Message):
+    user = await ensure_user(message.from_user)
+
+    now = int(time.time())
+    if now - user["last_daily"] < DAILY_COOLDOWN:
+        wait = DAILY_COOLDOWN - (now - user["last_daily"])
+        return await message.reply_text(
+            f"⏳ Come back in {wait // 3600} hours."
+        )
 
     await user_collection.update_one(
-        {"id": uid},
-        {"$inc": {"coins": amt}},
-        upsert=True
+        {"id": user["id"]},
+        {
+            "$inc": {"balance": DAILY_AMOUNT},
+            "$set": {"last_daily": now}
+        }
     )
 
-    await message.reply_text(f"✅ Added `{amt}` coins to `{uid}`")
-
-
-@app.on_message(filters.command("removecoins") & filters.user(ADMIN_IDS))
-async def removecoins(_, message):
-    uid = int(message.command[1])
-    amt = int(message.command[2])
-
-    await user_collection.update_one(
-        {"id": uid},
-        {"$inc": {"coins": -amt}}
+    await message.reply_text(
+        f"🎁 Daily reward claimed!\n💰 +{DAILY_AMOUNT} coins"
     )
-
-    await message.reply_text(f"❌ Removed `{amt}` coins from `{uid}`")
