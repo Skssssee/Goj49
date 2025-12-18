@@ -18,12 +18,12 @@ from TEAMZYRO import user_collection, collection
 # ─────────────────────────────
 
 PRICES = {
-    "Low": 500,
+    "Low": 5,
     "Medium": 1500,
     "High": 3000
 }
 
-DAILY_LIMIT = 15
+DAILY_LIMIT = 3
 
 
 # ─────────────────────────────
@@ -79,7 +79,7 @@ def roll_rarity():
 
 
 # ─────────────────────────────
-# /bazar
+# /bazar COMMAND
 # ─────────────────────────────
 
 @bot.on_message(filters.command("bazar"))
@@ -106,7 +106,7 @@ async def show_character(user_id, ctx, edit=False):
     rarity = roll_rarity()
     price = PRICES[rarity]
 
-    # ✅ ALWAYS FETCH FROM DB (DUPLICATES ALLOWED TO SHOW)
+    # ✅ Always fetch from DB (duplicates allowed to show)
     character = await collection.aggregate([
         {
             "$match": {
@@ -117,9 +117,10 @@ async def show_character(user_id, ctx, edit=False):
     ]).to_list(1)
 
     if not character:
+        msg = "❌ Character database is empty."
         if edit:
-            return await ctx.message.edit_text("❌ Character database is empty.")
-        return await ctx.reply_text("❌ Character database is empty.")
+            return await ctx.message.edit_text(msg)
+        return await ctx.reply_text(msg)
 
     char = character[0]
     owned = char["id"] in user["characters"]
@@ -168,12 +169,12 @@ async def show_character(user_id, ctx, edit=False):
 
 
 # ─────────────────────────────
-# NEXT BUTTON (EDIT SAME MESSAGE)
+# NEXT BUTTON (SILENT, EDIT SAME MESSAGE)
 # ─────────────────────────────
 
 @bot.on_callback_query(filters.regex("^bazar_next$"))
 async def bazar_next(_, cq: CallbackQuery):
-    await cq.answer("🎲 Rolling...")
+    await cq.answer()  # ✅ silent (no top bar message)
     await show_character(cq.from_user.id, cq, edit=True)
 
 
