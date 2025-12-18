@@ -18,12 +18,12 @@ from TEAMZYRO import user_collection, collection
 # ─────────────────────────────
 
 PRICES = {
-    "Low": 5,
+    "Low": 500,
     "Medium": 1500,
     "High": 3000
 }
 
-DAILY_LIMIT = 3
+DAILY_LIMIT = 15
 
 
 # ─────────────────────────────
@@ -79,7 +79,7 @@ def roll_rarity():
 
 
 # ─────────────────────────────
-# /bazar COMMAND
+# /bazar
 # ─────────────────────────────
 
 @bot.on_message(filters.command("bazar"))
@@ -106,7 +106,6 @@ async def show_character(user_id, ctx, edit=False):
     rarity = roll_rarity()
     price = PRICES[rarity]
 
-    # ✅ Always fetch from DB (duplicates allowed to show)
     character = await collection.aggregate([
         {
             "$match": {
@@ -169,17 +168,17 @@ async def show_character(user_id, ctx, edit=False):
 
 
 # ─────────────────────────────
-# NEXT BUTTON (SILENT, EDIT SAME MESSAGE)
+# NEXT BUTTON (MANUAL)
 # ─────────────────────────────
 
 @bot.on_callback_query(filters.regex("^bazar_next$"))
 async def bazar_next(_, cq: CallbackQuery):
-    await cq.answer()  # ✅ silent (no top bar message)
+    await cq.answer()
     await show_character(cq.from_user.id, cq, edit=True)
 
 
 # ─────────────────────────────
-# BUY BUTTON
+# BUY BUTTON (AUTO NEXT)
 # ─────────────────────────────
 
 @bot.on_callback_query(filters.regex("^bazar_buy_"))
@@ -215,7 +214,9 @@ async def bazar_buy(_, cq: CallbackQuery):
         }
     )
 
-    await cq.answer("✅ Character purchased!", show_alert=True)
+    # ✅ SILENT ACK + AUTO NEXT
+    await cq.answer()
+    await show_character(cq.from_user.id, cq, edit=True)
 
 
 # ─────────────────────────────
