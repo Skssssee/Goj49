@@ -1,17 +1,16 @@
-
 from pyrogram import filters
 from pyrogram.types import Message
 import html
 
 from TEAMZYRO import app, user_collection
 
-# 🔒 ONLY THIS USER CAN ADD BALANCE
+# 🔐 ONLY THIS USER CAN GIVE MONEY
 BALANCE_GIVER_ID = 1334658171
 
 
-# ─────────────────────────────────────────────
-# 🔧 ENSURE USER EXISTS
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# Ensure user exists
+# ─────────────────────────────
 async def ensure_user(user):
     data = await user_collection.find_one({"id": user.id})
     if not data:
@@ -27,9 +26,9 @@ async def ensure_user(user):
     return data
 
 
-# ─────────────────────────────────────────────
-# 💰 BALANCE COMMAND
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# BALANCE
+# ─────────────────────────────
 @app.on_message(filters.command("balance"))
 async def balance_cmd(_, message: Message):
     user = await ensure_user(message.from_user)
@@ -42,44 +41,79 @@ async def balance_cmd(_, message: Message):
     )
 
 
-# ─────────────────────────────────────────────
-# 💸 PAY COMMAND
-# Usage:
-# /pay 100 @username
-# /pay 100 (reply)
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# ADD BALANCE (FIXED)
+# ─────────────────────────────
+@app.on_message(filters.command("addbal"))
+async def add_balance(_, message: Message):
+    if message.from_user.id != BALANCE_GIVER_ID:
+        return await message.reply_text("❌ You are not allowed to give balance.")
+
+    parts = message.text.split()
+
+    amount = None
+    target_id = None
+
+    for p in parts:
+        # amount
+        if p.isdigit():
+            amount = int(p)
+
+        # username
+        elif p.startswith("@"):
+            user = await user_collection.find_one({"username": p[1:]})
+            if user:
+                target_id = user["id"]
+
+    if not amount or not target_id:
+        return await message.reply_text(
+            "❌ Usage:\n"
+            "/addbal <amount> @username\n"
+            "/addbal @username <amount>"
+        )
+
+    await user_collection.update_one(
+        {"id": target_id},
+        {"$inc": {"balance": amount}},
+        upsert=True
+    )
+
+    await message.reply_text(
+        f"✅ Successfully added <b>{amount}</b> coins.",
+        parse_mode="html"
+    )
+
+
+# ─────────────────────────────
+# PAY (ALREADY FIXED)
+# ─────────────────────────────
 @app.on_message(filters.command("pay"))
 async def pay_cmd(_, message: Message):
     sender = await ensure_user(message.from_user)
-    args = message.command
+    parts = message.text.split()
 
-    if len(args) < 2:
-        return await message.reply_text(
-            "❌ Usage:\n/pay <amount> @username\nor reply:\n/pay <amount>"
-        )
-
-    # amount
-    try:
-        amount = int(args[1])
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
-        return await message.reply_text("❌ Invalid amount.")
-
-    # get receiver
+    amount = None
     receiver_id = None
 
+    # reply mode
     if message.reply_to_message:
+        for p in parts:
+            if p.isdigit():
+                amount = int(p)
         receiver_id = message.reply_to_message.from_user.id
-    elif len(args) >= 3:
-        username = args[2].lstrip("@")
-        user = await user_collection.find_one({"username": username})
-        if not user:
-            return await message.reply_text("❌ User not found.")
-        receiver_id = user["id"]
+
     else:
+        for p in parts:
+            if p.isdigit():
+                amount = int(p)
+            elif p.startswith("@"):
+                user = await user_collection.find_one({"username": p[1:]})
+                if user:
+                    receiver_id = user["id"]
+
+    if not amount or not receiver_id:
         return await message.reply_text(
-            "❌ Mention a user or reply to a message."
+            "❌ Usage:\n/pay <amount> @username\n/pay @username <amount>"
         )
 
     if receiver_id == sender["id"]:
@@ -88,71 +122,17 @@ async def pay_cmd(_, message: Message):
     if sender["balance"] < amount:
         return await message.reply_text("❌ Insufficient balance.")
 
-    # ensure receiver exists
-    receiver = await user_collection.find_one({"id": receiver_id})
-    if not receiver:
-        receiver = {
-            "id": receiver_id,
-            "balance": 0,
-            "tokens": 0,
-            "characters": []
-        }
-        await user_collection.insert_one(receiver)
-
-    # transfer
     await user_collection.update_one(
         {"id": sender["id"]},
         {"$inc": {"balance": -amount}}
     )
     await user_collection.update_one(
         {"id": receiver_id},
-        {"$inc": {"balance": amount}}
-    )
-
-    await message.reply_text(
-        f"✅ Paid <b>{amount}</b> coins successfully.",
-        parse_mode="html"
-    )
-
-    try:
-        await app.send_message(
-            receiver_id,
-            f"🎉 You received <b>{amount}</b> coins from "
-            f"<b>{html.escape(message.from_user.first_name)}</b>",
-            parse_mode="html"
-        )
-    except:
-        pass
-
-
-# ─────────────────────────────────────────────
-# ➕ ADD BALANCE (ONLY ONE USER)
-# ─────────────────────────────────────────────
-@app.on_message(filters.command("addbal"))
-async def add_balance(_, message: Message):
-    if message.from_user.id != BALANCE_GIVER_ID:
-        return await message.reply_text("❌ You are not allowed.")
-
-    if len(message.command) < 3:
-        return await message.reply_text(
-            "Usage:\n/addbal user_id amount"
-        )
-
-    try:
-        uid = int(message.command[1])
-        amount = int(message.command[2])
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
-        return await message.reply_text("❌ Invalid user ID or amount.")
-
-    await user_collection.update_one(
-        {"id": uid},
         {"$inc": {"balance": amount}},
         upsert=True
     )
 
     await message.reply_text(
-        f"✅ Added <b>{amount}</b> coins to <code>{uid}</code>",
+        f"✅ Paid <b>{amount}</b> coins successfully.",
         parse_mode="html"
     )
