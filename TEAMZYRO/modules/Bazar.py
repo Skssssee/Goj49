@@ -1,23 +1,25 @@
 import random
-from datetime import datetime
 from pyrogram import filters
-from pyrogram.types import (
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    CallbackQuery
-)
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from TEAMZYRO import ZYRO as bot
 from TEAMZYRO import user_collection, collection
 
-
+# ─── PRICES ─────────────────────────────
 PRICES = {
     "common": 500,
     "medium": 1500,
     "high": 3000
 }
 
+# ─── RARITY MAPPING (MATCH DB) ──────────
+RARITY_MAP = {
+    "common": ["Low"],
+    "medium": ["Medium"],
+    "high": ["High"]
+}
 
-# ─── /bazar command ───────────────────────────────────────
+
+# ─── /bazar COMMAND ─────────────────────
 @bot.on_message(filters.command("bazar"))
 async def bazar_cmd(_, message):
     keyboard = InlineKeyboardMarkup(
@@ -35,31 +37,31 @@ async def bazar_cmd(_, message):
     )
 
 
-# ─── Button handler ───────────────────────────────────────
+# ─── CALLBACK HANDLER ───────────────────
 @bot.on_callback_query(filters.regex("^bazar_"))
 async def bazar_callback(_, cq: CallbackQuery):
     user = cq.from_user
-    user_id = user.id
-    rarity = cq.data.split("_")[1]  # common / medium / high
-    price = PRICES[rarity]
+    rarity_key = cq.data.split("_")[1]   # common / medium / high
+    price = PRICES[rarity_key]
+    valid_rarities = RARITY_MAP[rarity_key]
 
     # Get user
-    user_data = await user_collection.find_one({"id": user_id})
+    user_data = await user_collection.find_one({"id": user.id})
     if not user_data:
         return await cq.answer("❌ You are not registered!", show_alert=True)
 
-    coins = user_data.get("coins", 0)
-    if coins < price:
+    balance = user_data.get("balance", 0)
+    if balance < price:
         return await cq.answer(
-            f"❌ Not enough coins!\nRequired: {price}\nYou have: {coins}",
+            f"❌ Not enough balance!\nRequired: {price}\nYou have: {balance}",
             show_alert=True
         )
 
-    # Fetch character from DB
+    # Fetch random character
     character = await collection.aggregate([
         {
             "$match": {
-                "rarity": {"$regex": f"^{rarity}$", "$options": "i"},
+                "rarity": {"$in": valid_rarities},
                 "img_url": {"$exists": True, "$ne": ""}
             }
         },
@@ -71,11 +73,11 @@ async def bazar_callback(_, cq: CallbackQuery):
 
     char = character[0]
 
-    # Update user (deduct coins + give character)
+    # Update user
     await user_collection.update_one(
-        {"id": user_id},
+        {"id": user.id},
         {
-            "$inc": {"coins": -price},
+            "$inc": {"balance": -price},
             "$push": {"characters": char}
         }
     )
@@ -85,11 +87,11 @@ async def bazar_callback(_, cq: CallbackQuery):
         photo=char["img_url"],
         caption=(
             f"🛒 **Purchase Successful!**\n\n"
-            f"👤 **Buyer:** {user.mention}\n"
-            f"💃 **Name:** `{char['name']}`\n"
-            f"⭐ **Rarity:** `{char['rarity']}`\n"
-            f"📺 **Anime:** `{char['anime']}`\n"
-            f"💰 **Cost:** `{price} coins`"
+            f"👤 Buyer: {user.mention}\n"
+            f"💃 Name: `{char['name']}`\n"
+            f"⭐ Rarity: `{char['rarity']}`\n"
+            f"📺 Anime: `{char['anime']}`\n"
+            f"💰 Cost: `{price}` coins"
         )
     )
 
