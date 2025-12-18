@@ -1,18 +1,20 @@
 from pyrogram import filters
 from pyrogram.types import Message
+from pyrogram.enums import ParseMode
 import html
 
 from TEAMZYRO import app, user_collection
 
-# 🔐 ONLY THIS USER CAN GIVE MONEY
+# 🔐 ONLY THIS USER CAN GIVE BALANCE
 BALANCE_GIVER_ID = 1334658171
 
 
-# ─────────────────────────────
-# Ensure user exists
-# ─────────────────────────────
+# ─────────────────────────────────
+# ENSURE USER (AUTO-FIX OLD USERS)
+# ─────────────────────────────────
 async def ensure_user(user):
     data = await user_collection.find_one({"id": user.id})
+
     if not data:
         data = {
             "id": user.id,
@@ -23,43 +25,59 @@ async def ensure_user(user):
             "characters": []
         }
         await user_collection.insert_one(data)
+        return data
+
+    updates = {}
+
+    if "balance" not in data:
+        updates["balance"] = 0
+    if "tokens" not in data:
+        updates["tokens"] = 0
+    if "first_name" not in data:
+        updates["first_name"] = user.first_name
+    if "username" not in data:
+        updates["username"] = user.username
+
+    if updates:
+        await user_collection.update_one(
+            {"id": user.id},
+            {"$set": updates}
+        )
+        data.update(updates)
+
     return data
 
 
-# ─────────────────────────────
-# BALANCE
-# ─────────────────────────────
+# ─────────────────────────────────
+# BALANCE COMMAND
+# ─────────────────────────────────
 @app.on_message(filters.command("balance"))
 async def balance_cmd(_, message: Message):
     user = await ensure_user(message.from_user)
 
     await message.reply_text(
         f"💰 <b>{html.escape(message.from_user.first_name)}'s Balance</b>\n\n"
-        f"🪙 Coins: <b>{user.get('balance', 0)}</b>\n"
-        f"🎟 Tokens: <b>{user.get('tokens', 0)}</b>",
-        parse_mode="html"
+        f"🪙 Coins: <b>{user['balance']}</b>\n"
+        f"🎟 Tokens: <b>{user['tokens']}</b>",
+        parse_mode=ParseMode.HTML
     )
 
 
-# ─────────────────────────────
-# ADD BALANCE (FIXED)
-# ─────────────────────────────
+# ─────────────────────────────────
+# ADD BALANCE (ONLY ONE USER)
+# ─────────────────────────────────
 @app.on_message(filters.command("addbal"))
 async def add_balance(_, message: Message):
     if message.from_user.id != BALANCE_GIVER_ID:
         return await message.reply_text("❌ You are not allowed to give balance.")
 
     parts = message.text.split()
-
     amount = None
     target_id = None
 
     for p in parts:
-        # amount
         if p.isdigit():
             amount = int(p)
-
-        # username
         elif p.startswith("@"):
             user = await user_collection.find_one({"username": p[1:]})
             if user:
@@ -79,14 +97,14 @@ async def add_balance(_, message: Message):
     )
 
     await message.reply_text(
-        f"✅ Successfully added <b>{amount}</b> coins.",
-        parse_mode="html"
+        f"✅ Added <b>{amount}</b> coins successfully.",
+        parse_mode=ParseMode.HTML
     )
 
 
-# ─────────────────────────────
-# PAY (ALREADY FIXED)
-# ─────────────────────────────
+# ─────────────────────────────────
+# PAY COMMAND (FIXED)
+# ─────────────────────────────────
 @app.on_message(filters.command("pay"))
 async def pay_cmd(_, message: Message):
     sender = await ensure_user(message.from_user)
@@ -95,13 +113,11 @@ async def pay_cmd(_, message: Message):
     amount = None
     receiver_id = None
 
-    # reply mode
     if message.reply_to_message:
+        receiver_id = message.reply_to_message.from_user.id
         for p in parts:
             if p.isdigit():
                 amount = int(p)
-        receiver_id = message.reply_to_message.from_user.id
-
     else:
         for p in parts:
             if p.isdigit():
@@ -113,11 +129,10 @@ async def pay_cmd(_, message: Message):
 
     if not amount or not receiver_id:
         return await message.reply_text(
-            "❌ Usage:\n/pay <amount> @username\n/pay @username <amount>"
+            "❌ Usage:\n"
+            "/pay <amount> @username\n"
+            "/pay @username <amount>"
         )
-
-    if receiver_id == sender["id"]:
-        return await message.reply_text("❌ You cannot pay yourself.")
 
     if sender["balance"] < amount:
         return await message.reply_text("❌ Insufficient balance.")
@@ -126,6 +141,7 @@ async def pay_cmd(_, message: Message):
         {"id": sender["id"]},
         {"$inc": {"balance": -amount}}
     )
+
     await user_collection.update_one(
         {"id": receiver_id},
         {"$inc": {"balance": amount}},
@@ -134,5 +150,5 @@ async def pay_cmd(_, message: Message):
 
     await message.reply_text(
         f"✅ Paid <b>{amount}</b> coins successfully.",
-        parse_mode="html"
+        parse_mode=ParseMode.HTML
     )
