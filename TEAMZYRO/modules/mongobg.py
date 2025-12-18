@@ -1,69 +1,125 @@
-from pyrogram import Client, filters
+from pyrogram import filters
 from pymongo import MongoClient
-import os
-import asyncio
 import bson
 from TEAMZYRO import app
 
-def calculate_collection_size(documents):
-    """
-    Calculate the size of a list of documents in bytes.
-    """
-    return sum(len(bson.BSON.encode(doc)) for doc in documents)
+# ─────────────────────────────
+# UTILS
+# ─────────────────────────────
+
+def collection_size_mb(docs):
+    size = sum(len(bson.BSON.encode(doc)) for doc in docs)
+    return round(size / (1024 * 1024), 2)
+
+
+def connect(uri):
+    return MongoClient(uri, serverSelectionTimeoutMS=5000)
+
+
+# ─────────────────────────────
+# /mongobackup
+# ─────────────────────────────
+# Usage:
+# /mongobackup SOURCE_URI BACKUP_URI DB_NAME
+# ─────────────────────────────
 
 @app.on_message(filters.command("mongobackup") & filters.private)
-async def mongo_backup(client, message):
+async def mongo_backup(_, message):
+    args = message.text.split()
+
+    if len(args) != 4:
+        return await message.reply_text(
+            "❌ Usage:\n"
+            "`/mongobackup SOURCE_MONGO_URI BACKUP_MONGO_URI DB_NAME`"
+        )
+
+    source_uri, backup_uri, db_name = args[1], args[2], args[3]
+
     try:
-        # Split command arguments
-        args = message.text.split()
-        if len(args) != 4:
-            await message.reply("Usage: /mongobackup {source_mongo_uri} {destination_mongo_uri} {database_name}")
-            return
+        await message.reply_text("🔌 Connecting to databases...")
 
-        source_mongo_uri = args[1]
-        destination_mongo_uri = args[2]
-        database_name = args[3]
+        src = connect(source_uri)
+        bak = connect(backup_uri)
 
-        await message.reply(f"Connecting to source MongoDB: `{source_mongo_uri}`...")
-        source_client = MongoClient(source_mongo_uri)
-        source_db = source_client[database_name]
+        src_db = src[db_name]
+        bak_db = bak[db_name]
 
-        await message.reply(f"Connecting to destination MongoDB: `{destination_mongo_uri}`...")
-        dest_client = MongoClient(destination_mongo_uri)
-        dest_db = dest_client[database_name]
+        total = 0
 
-        await message.reply(f"Starting backup of `{database_name}`...")
+        for col_name in src_db.list_collection_names():
+            src_col = src_db[col_name]
+            bak_col = bak_db[col_name]
 
-        total_size = 0  # Total size tracker
-        for collection_name in source_db.list_collection_names():
-            source_collection = source_db[collection_name]
-            dest_collection = dest_db[collection_name]
+            docs = list(src_col.find())
+            bak_col.delete_many({})
 
-            # Fetch all documents from the source collection
-            documents = list(source_collection.find())
-            collection_size = calculate_collection_size(documents)
-            total_size += collection_size
+            if docs:
+                bak_col.insert_many(docs)
+                size = collection_size_mb(docs)
+                total += size
 
-            # Clear destination collection and insert updated documents
-            dest_collection.delete_many({})  # Clear old data
-            if documents:
-                dest_collection.insert_many(documents)
-                size_mb = collection_size / (1024 * 1024)
-                size_str = f"{size_mb:.2f} MB" if size_mb >= 1 else f"{collection_size / 1024:.2f} KB"
-                await message.reply(f"Collection `{collection_name}` backed up successfully. Size: {size_str}.")
+                await message.reply_text(
+                    f"✅ `{col_name}` backed up\n"
+                    f"📦 Size: `{size} MB`"
+                )
             else:
-                await message.reply(f"Collection `{collection_name}` is empty. Skipping...")
+                await message.reply_text(f"⚠️ `{col_name}` empty, skipped")
 
-        total_size_mb = total_size / (1024 * 1024)
-        total_size_str = f"{total_size_mb:.2f} MB" if total_size_mb >= 1 else f"{total_size / 1024:.2f} KB"
-        await message.reply(f"Backup of `{database_name}` completed successfully! Total size: {total_size_str}.")
+        await message.reply_text(
+            f"🎉 **BACKUP COMPLETE**\n\n"
+            f"📂 Database: `{db_name}`\n"
+            f"💾 Total Size: `{total} MB`"
+        )
+
     except Exception as e:
-        await message.reply(f"An error occurred: {e}")
-    finally:
-        # Close MongoDB connections
-        try:
-            source_client.close()
-            dest_client.close()
-        except:
-            pass
+        await message.reply_text(f"❌ Backup failed:\n`{e}`")
 
+
+# ─────────────────────────────
+# /mongorestore
+# ─────────────────────────────
+# Usage:
+# /mongorestore BACKUP_URI ORIGINAL_URI DB_NAME
+# ─────────────────────────────
+
+@app.on_message(filters.command("mongorestore") & filters.private)
+async def mongo_restore(_, message):
+    args = message.text.split()
+
+    if len(args) != 4:
+        return await message.reply_text(
+            "❌ Usage:\n"
+            "`/mongorestore BACKUP_MONGO_URI ORIGINAL_MONGO_URI DB_NAME`"
+        )
+
+    backup_uri, original_uri, db_name = args[1], args[2], args[3]
+
+    try:
+        await message.reply_text("🔄 Restoring database...")
+
+        bak = connect(backup_uri)
+        org = connect(original_uri)
+
+        bak_db = bak[db_name]
+        org_db = org[db_name]
+
+        for col_name in bak_db.list_collection_names():
+            bak_col = bak_db[col_name]
+            org_col = org_db[col_name]
+
+            docs = list(bak_col.find())
+            org_col.delete_many({})
+
+            if docs:
+                org_col.insert_many(docs)
+                await message.reply_text(f"♻️ Restored `{col_name}`")
+            else:
+                await message.reply_text(f"⚠️ `{col_name}` empty, skipped")
+
+        await message.reply_text(
+            f"✅ **RESTORE COMPLETE**\n\n"
+            f"📂 Database: `{db_name}`"
+        )
+
+    except Exception as e:
+        await message.reply_text(f"❌ Restore failed:\n`{e}`")
