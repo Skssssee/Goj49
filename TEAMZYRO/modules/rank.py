@@ -1,163 +1,172 @@
-from pyrogram import Client, filters, enums
+
+from pyrogram import filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 import random
-import asyncio
 import html
+import asyncio
 
-from TEAMZYRO import app as Client
+from TEAMZYRO import app
 from TEAMZYRO import user_collection, top_global_groups_collection
 
 PHOTO_URL = ["https://files.catbox.moe/9j8e6b.jpg"]
 
 
 # ─────────────────────────────────────────────
-# /rank
+# MAIN /rank COMMAND
 # ─────────────────────────────────────────────
-@Client.on_message(filters.command("rank"))
-async def rank(client, message):
-    cursor = user_collection.find(
-        {}, {"_id": 0, "id": 1, "first_name": 1, "characters": 1}
-    )
-
-    users = await cursor.to_list(length=None)
-    users.sort(key=lambda x: len(x.get("characters", [])), reverse=True)
-    users = users[:10]
-
-    caption = "<b>TOP 10 USERS WITH MOST CHARACTERS</b>\n\n"
-    for i, u in enumerate(users, start=1):
-        caption += (
-            f"{i}. <a href='tg://user?id={u['id']}'>"
-            f"{html.escape(u.get('first_name','Unknown'))}</a> "
-            f"➜ {len(u.get('characters', []))}\n"
-        )
+@app.on_message(filters.command("rank"))
+async def rank_cmd(client, message):
+    caption = await build_mtop_caption()
 
     await message.reply_photo(
         photo=random.choice(PHOTO_URL),
         caption=caption,
         parse_mode=enums.ParseMode.HTML,
-        reply_markup=rank_buttons("top")
+        reply_markup=rank_buttons("mtop")
     )
 
 
 # ─────────────────────────────────────────────
-# BUTTON BUILDER
+# BUTTON LAYOUT
 # ─────────────────────────────────────────────
 def rank_buttons(active):
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("TOP 🥀" if active == "top" else "TOP", callback_data="top"),
                 InlineKeyboardButton(
-                    "TOP GROUP 🥀" if active == "top_group" else "TOP GROUP",
-                    callback_data="top_group"
+                    "🏆 MTOP" if active == "mtop" else "MTOP",
+                    callback_data="rank_mtop"
                 ),
+                InlineKeyboardButton(
+                    "🪙 TOKENS" if active == "tokens" else "TOKENS",
+                    callback_data="rank_tokens"
+                )
             ],
             [
-                InlineKeyboardButton("MTOP 🥀" if active == "mtop" else "MTOP", callback_data="mtop"),
-                InlineKeyboardButton("TOKENS 🥀" if active == "tokens" else "TOKENS", callback_data="tokens"),
-            ],
+                InlineKeyboardButton(
+                    "👥 TOP USERS" if active == "top" else "TOP USERS",
+                    callback_data="rank_top"
+                ),
+                InlineKeyboardButton(
+                    "🏘 TOP GROUPS" if active == "groups" else "TOP GROUPS",
+                    callback_data="rank_groups"
+                )
+            ]
         ]
     )
 
 
 # ─────────────────────────────────────────────
-# TOP USERS (CHARACTERS)
+# BUILD CAPTIONS
 # ─────────────────────────────────────────────
-@Client.on_callback_query(filters.regex("^top$"))
-async def top_cb(client, cq):
+async def build_mtop_caption():
     users = await user_collection.find(
-        {}, {"id": 1, "first_name": 1, "characters": 1}
+        {"balance": {"$gt": 0}}
+    ).sort("balance", -1).limit(10).to_list(10)
+
+    text = "<b>🏆 MTOP LEADERBOARD (COINS)</b>\n\n"
+
+    if not users:
+        return text + "No users with balance yet."
+
+    for i, u in enumerate(users, 1):
+        name = html.escape(u.get("first_name", "Unknown"))
+        bal = u.get("balance", 0)
+        uid = u.get("id")
+        text += f"{i}. <a href='tg://user?id={uid}'>{name}</a> → 💰 <b>{bal}</b>\n"
+
+    return text
+
+
+async def build_tokens_caption():
+    users = await user_collection.find(
+        {"tokens": {"$gt": 0}}
+    ).sort("tokens", -1).limit(10).to_list(10)
+
+    text = "<b>🪙 TOKENS LEADERBOARD</b>\n\n"
+
+    if not users:
+        return text + "No users with tokens yet."
+
+    for i, u in enumerate(users, 1):
+        name = html.escape(u.get("first_name", "Unknown"))
+        tokens = u.get("tokens", 0)
+        uid = u.get("id")
+        text += f"{i}. <a href='tg://user?id={uid}'>{name}</a> → 🪙 <b>{tokens}</b>\n"
+
+    return text
+
+
+async def build_top_users_caption():
+    users = await user_collection.find(
+        {"characters": {"$exists": True}}
     ).to_list(None)
 
     users.sort(key=lambda x: len(x.get("characters", [])), reverse=True)
     users = users[:10]
 
-    caption = "<b>TOP 10 USERS WITH MOST CHARACTERS</b>\n\n"
-    for i, u in enumerate(users, start=1):
-        caption += (
-            f"{i}. <a href='tg://user?id={u['id']}'>"
-            f"{html.escape(u.get('first_name','Unknown'))}</a> "
-            f"➜ {len(u.get('characters', []))}\n"
-        )
+    text = "<b>👥 TOP USERS BY CHARACTERS</b>\n\n"
 
-    if cq.message.caption != caption:
-        await cq.edit_message_caption(
+    if not users:
+        return text + "No data available."
+
+    for i, u in enumerate(users, 1):
+        name = html.escape(u.get("first_name", "Unknown"))
+        count = len(u.get("characters", []))
+        uid = u.get("id")
+        text += f"{i}. <a href='tg://user?id={uid}'>{name}</a> → 🎴 <b>{count}</b>\n"
+
+    return text
+
+
+async def build_groups_caption():
+    groups = await top_global_groups_collection.aggregate(
+        [
+            {"$project": {"group_name": 1, "count": 1}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10}
+        ]
+    ).to_list(10)
+
+    text = "<b>🏘 TOP GROUPS</b>\n\n"
+
+    if not groups:
+        return text + "No group data available."
+
+    for i, g in enumerate(groups, 1):
+        name = html.escape(g.get("group_name", "Unknown"))
+        count = g.get("count", 0)
+        text += f"{i}. {name} → 🎴 <b>{count}</b>\n"
+
+    return text
+
+
+# ─────────────────────────────────────────────
+# CALLBACK HANDLER
+# ─────────────────────────────────────────────
+@app.on_callback_query(filters.regex("^rank_"))
+async def rank_callback(client, cq):
+    action = cq.data.replace("rank_", "")
+
+    if action == "mtop":
+        caption = await build_mtop_caption()
+    elif action == "tokens":
+        caption = await build_tokens_caption()
+    elif action == "top":
+        caption = await build_top_users_caption()
+    elif action == "groups":
+        caption = await build_groups_caption()
+    else:
+        return await cq.answer("Unknown action")
+
+    try:
+        await cq.message.edit_caption(
             caption=caption,
             parse_mode=enums.ParseMode.HTML,
-            reply_markup=rank_buttons("top")
+            reply_markup=rank_buttons(action)
         )
+    except Exception:
+        # Prevent MESSAGE_NOT_MODIFIED crash
+        pass
 
-
-# ─────────────────────────────────────────────
-# TOP GROUPS
-# ─────────────────────────────────────────────
-@Client.on_callback_query(filters.regex("^top_group$"))
-async def top_group_cb(client, cq):
-    groups = await top_global_groups_collection.aggregate([
-        {"$project": {"group_name": 1, "count": 1}},
-        {"$sort": {"count": -1}},
-        {"$limit": 10}
-    ]).to_list(10)
-
-    caption = "<b>TOP 10 GROUPS</b>\n\n"
-    for i, g in enumerate(groups, start=1):
-        caption += f"{i}. {html.escape(g.get('group_name','Unknown'))} ➜ {g['count']}\n"
-
-    if cq.message.caption != caption:
-        await cq.edit_message_caption(
-            caption=caption,
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=rank_buttons("top_group")
-        )
-
-
-# ─────────────────────────────────────────────
-# MTOP (BALANCE — FIXED)
-# ─────────────────────────────────────────────
-@Client.on_callback_query(filters.regex("^mtop$"))
-async def mtop_cb(client, cq):
-    users = await user_collection.find(
-        {"balance": {"$exists": True}},
-        {"id": 1, "first_name": 1, "balance": 1}
-    ).sort("balance", -1).limit(10).to_list(10)
-
-    caption = "<b>MTOP LEADERBOARD</b>\n\n"
-    for i, u in enumerate(users, start=1):
-        caption += (
-            f"{i}. <a href='tg://user?id={u['id']}'>"
-            f"{html.escape(u.get('first_name','Unknown'))}</a> "
-            f"➜ 💰 {u.get('balance',0)}\n"
-        )
-
-    if cq.message.caption != caption:
-        await cq.edit_message_caption(
-            caption=caption,
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=rank_buttons("mtop")
-        )
-
-
-# ─────────────────────────────────────────────
-# TOKENS
-# ─────────────────────────────────────────────
-@Client.on_callback_query(filters.regex("^tokens$"))
-async def tokens_cb(client, cq):
-    users = await user_collection.find(
-        {"tokens": {"$exists": True}},
-        {"id": 1, "first_name": 1, "tokens": 1}
-    ).sort("tokens", -1).limit(10).to_list(10)
-
-    caption = "<b>TOKENS LEADERBOARD</b>\n\n"
-    for i, u in enumerate(users, start=1):
-        caption += (
-            f"{i}. <a href='tg://user?id={u['id']}'>"
-            f"{html.escape(u.get('first_name','Unknown'))}</a> "
-            f"➜ 🎟 {u.get('tokens',0)}\n"
-        )
-
-    if cq.message.caption != caption:
-        await cq.edit_message_caption(
-            caption=caption,
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=rank_buttons("tokens")
-        )
+    await cq.answer()
