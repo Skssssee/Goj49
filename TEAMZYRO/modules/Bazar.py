@@ -2,7 +2,12 @@ import random
 from datetime import datetime
 
 from pyrogram import filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+    InputMediaPhoto
+)
 
 from TEAMZYRO import ZYRO as bot
 from TEAMZYRO import user_collection, collection
@@ -14,7 +19,7 @@ from TEAMZYRO import user_collection, collection
 
 PRICES = {
     "Low": 500,
-    "Medium": 1500,   # Rare
+    "Medium": 1500,
     "High": 3000
 }
 
@@ -42,7 +47,7 @@ async def ensure_user(user_id):
         }
         await user_collection.insert_one(user)
 
-    # 🔄 AUTO DAILY RESET
+    # 🔄 DAILY RESET
     if user.get("bazar_date") != today_str():
         await user_collection.update_one(
             {"id": user_id},
@@ -79,26 +84,29 @@ def roll_rarity():
 
 @bot.on_message(filters.command("bazar"))
 async def bazar_cmd(_, message):
-    await show_character(message.from_user.id, message)
+    await show_character(message.from_user.id, message, edit=False)
 
 
 # ─────────────────────────────
-# SHOW CHARACTER (ALWAYS FETCH)
+# SHOW CHARACTER (SEND / EDIT)
 # ─────────────────────────────
 
-async def show_character(user_id, ctx):
+async def show_character(user_id, ctx, edit=False):
     user = await ensure_user(user_id)
 
     if user["bazar_count"] >= DAILY_LIMIT:
-        return await ctx.reply_text(
+        text = (
             "🛑 **Daily limit reached**\n"
             "🛒 Purchases today: **15 / 15**"
         )
+        if edit:
+            return await ctx.message.edit_text(text)
+        return await ctx.reply_text(text)
 
     rarity = roll_rarity()
     price = PRICES[rarity]
 
-    # ✅ FETCH WITHOUT BLOCKING DUPLICATES
+    # ✅ ALWAYS FETCH FROM DB (DUPLICATES ALLOWED TO SHOW)
     character = await collection.aggregate([
         {
             "$match": {
@@ -108,8 +116,9 @@ async def show_character(user_id, ctx):
         {"$sample": {"size": 1}}
     ]).to_list(1)
 
-    # 🔁 ABSOLUTE FAILSAFE (DB EMPTY)
     if not character:
+        if edit:
+            return await ctx.message.edit_text("❌ Character database is empty.")
         return await ctx.reply_text("❌ Character database is empty.")
 
     char = character[0]
@@ -142,10 +151,12 @@ async def show_character(user_id, ctx):
         f"🛒 **Purchases today:** `{user['bazar_count']} / {DAILY_LIMIT}`"
     )
 
-    if hasattr(ctx, "message"):
-        await ctx.message.reply_photo(
-            photo=char["img_url"],
-            caption=caption,
+    if edit:
+        await ctx.message.edit_media(
+            media=InputMediaPhoto(
+                media=char["img_url"],
+                caption=caption
+            ),
             reply_markup=keyboard
         )
     else:
@@ -157,13 +168,13 @@ async def show_character(user_id, ctx):
 
 
 # ─────────────────────────────
-# NEXT BUTTON
+# NEXT BUTTON (EDIT SAME MESSAGE)
 # ─────────────────────────────
 
 @bot.on_callback_query(filters.regex("^bazar_next$"))
 async def bazar_next(_, cq: CallbackQuery):
-    await cq.answer()
-    await show_character(cq.from_user.id, cq)
+    await cq.answer("🎲 Rolling...")
+    await show_character(cq.from_user.id, cq, edit=True)
 
 
 # ─────────────────────────────
@@ -207,7 +218,7 @@ async def bazar_buy(_, cq: CallbackQuery):
 
 
 # ─────────────────────────────
-# OWNED BUTTON HANDLER
+# OWNED BUTTON
 # ─────────────────────────────
 
 @bot.on_callback_query(filters.regex("^owned$"))
