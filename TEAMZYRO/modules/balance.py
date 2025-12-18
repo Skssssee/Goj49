@@ -23,7 +23,7 @@ async def get_or_create_user(user):
     return data
 
 
-async def username_to_id(client: Client, username: str):
+async def resolve_username(client: Client, username: str):
     username = username.lstrip("@")
     try:
         user = await client.get_users(username)
@@ -40,62 +40,67 @@ async def username_to_id(client: Client, username: str):
 async def balance_cmd(client: Client, message: Message):
     user = await get_or_create_user(message.from_user)
 
-    coins = user.get("balance", 0)
-    tokens = user.get("tokens", 0)
-
     await message.reply_text(
         f"👤 {html.escape(message.from_user.first_name)}\n\n"
-        f"💰 Coins: `{coins}`\n"
-        f"🪙 Tokens: `{tokens}`"
+        f"💰 Coins: `{user.get('balance', 0)}`\n"
+        f"🪙 Tokens: `{user.get('tokens', 0)}`"
     )
 
 
 # ─────────────────────────────────────────────
-# /pay
+# /pay (SMART VERSION)
 # ─────────────────────────────────────────────
 
 @app.on_message(filters.command("pay"))
 async def pay_cmd(client: Client, message: Message):
     args = message.command
+    sender = await get_or_create_user(message.from_user)
 
-    if len(args) < 2:
+    receiver_id = None
+    receiver_name = None
+    amount = None
+
+    # ─── CASE 1: Reply + /pay amount
+    if message.reply_to_message and len(args) == 2:
+        receiver = message.reply_to_message.from_user
+        receiver_id = receiver.id
+        receiver_name = receiver.first_name
+
+        try:
+            amount = int(args[1])
+        except ValueError:
+            return await message.reply_text("❌ Invalid amount.")
+
+    # ─── CASE 2: /pay amount @username
+    elif len(args) == 3 and args[1].isdigit():
+        amount = int(args[1])
+        receiver_id, receiver_name = await resolve_username(client, args[2])
+
+    # ─── CASE 3: /pay @username amount
+    elif len(args) == 3 and args[2].isdigit():
+        amount = int(args[2])
+        receiver_id, receiver_name = await resolve_username(client, args[1])
+
+    else:
         return await message.reply_text(
-            "❌ Usage:\n"
-            "`/pay amount @username`\n"
-            "or reply to a user"
+            "❌ Invalid format.\n\n"
+            "✅ Correct usage:\n"
+            "`/pay 78 @username`\n"
+            "`/pay @username 78`\n"
+            "or reply + `/pay 78`"
         )
 
-    # Validate amount
-    try:
-        amount = int(args[1])
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
-        return await message.reply_text("❌ Invalid amount.")
+    # ─── VALIDATION
+    if not receiver_id or amount is None or amount <= 0:
+        return await message.reply_text("❌ Invalid amount or user.")
 
-    sender = await get_or_create_user(message.from_user)
-    sender_balance = sender.get("balance", 0)
-
-    if sender_balance < amount:
-        return await message.reply_text("❌ Insufficient balance.")
-
-    # ─── GET RECEIVER ─────────────────────────
-    if message.reply_to_message:
-        receiver_user = message.reply_to_message.from_user
-        receiver_id = receiver_user.id
-        receiver_name = receiver_user.first_name
-    elif len(args) >= 3:
-        receiver_id, receiver_name = await username_to_id(client, args[2])
-        if not receiver_id:
-            return await message.reply_text("❌ User not found.")
-    else:
-        return await message.reply_text("❌ Specify a user or reply.")
-
-    # Prevent self-pay
-    if receiver_id == message.from_user.id:
+    if receiver_id == sender["id"]:
         return await message.reply_text("❌ You cannot pay yourself.")
 
-    # Ensure receiver exists
+    if sender.get("balance", 0) < amount:
+        return await message.reply_text("❌ Insufficient balance.")
+
+    # ─── ENSURE RECEIVER EXISTS
     receiver = await user_collection.find_one({"id": receiver_id})
     if not receiver:
         await user_collection.insert_one({
@@ -105,7 +110,7 @@ async def pay_cmd(client: Client, message: Message):
             "tokens": 0
         })
 
-    # ─── UPDATE BALANCES ──────────────────────
+    # ─── UPDATE BALANCES
     await user_collection.update_one(
         {"id": sender["id"]},
         {"$inc": {"balance": -amount}}
@@ -117,8 +122,8 @@ async def pay_cmd(client: Client, message: Message):
     )
 
     await message.reply_text(
-        f"✅ You paid **{amount} coins** to "
-        f"<a href='tg://user?id={receiver_id}'>{html.escape(receiver_name)}</a>.",
+        f"✅ Paid **{amount} coins** to "
+        f"<a href='tg://user?id={receiver_id}'>{html.escape(receiver_name)}</a>",
         parse_mode="html"
     )
 
@@ -126,8 +131,8 @@ async def pay_cmd(client: Client, message: Message):
         await client.send_message(
             receiver_id,
             f"🎉 You received **{amount} coins** from "
-            f"{html.escape(message.from_user.first_name)}.",
+            f"{html.escape(message.from_user.first_name)}",
             parse_mode="html"
         )
-    except Exception:
+    except:
         pass
