@@ -12,8 +12,15 @@ from TEAMZYRO import user_collection, collection
 # CONFIG
 # ─────────────────────────────
 
-SMASH_COOLDOWN = 10  # minutes
-PROPOSE_COOLDOWN = 15  # minutes
+SMASH_COOLDOWN = 10       # minutes
+PROPOSE_COOLDOWN = 15     # minutes
+
+# Rarity-based success chances
+RARITY_SUCCESS = {
+    "Low": 80,
+    "Medium": 60,
+    "High": 40
+}
 
 
 # ─────────────────────────────
@@ -31,11 +38,12 @@ def roll_rarity():
 
 
 # ─────────────────────────────
-# PREVIEW HANDLER (SAFE)
+# PREVIEW HANDLER
 # ─────────────────────────────
 
-async def send_preview(message, mode: str):
+async def send_preview(message, mode):
     user_id = message.from_user.id
+    now = datetime.utcnow()
 
     user = await user_collection.find_one({"id": user_id})
     if not user:
@@ -48,9 +56,6 @@ async def send_preview(message, mode: str):
         }
         await user_collection.insert_one(user)
 
-    now = datetime.utcnow()
-
-    # cooldown check
     last_time = user.get("last_smash_time" if mode == "smash" else "last_propose_time")
     cooldown = SMASH_COOLDOWN if mode == "smash" else PROPOSE_COOLDOWN
 
@@ -61,13 +66,13 @@ async def send_preview(message, mode: str):
             f"⏳ Wait `{m}m {s}s` before using /{mode} again."
         )
 
-    # dice
+    # Dice animation
     await bot.send_dice(message.chat.id, "🎲")
     await asyncio.sleep(2)
 
     rolled_rarity = roll_rarity()
 
-    # 🔥 TRY rarity match (OPTIONAL)
+    # Always fetch a character safely
     character = await collection.aggregate([
         {"$match": {"img_url": {"$exists": True, "$ne": ""}}},
         {"$sample": {"size": 1}}
@@ -79,26 +84,25 @@ async def send_preview(message, mode: str):
     char = character[0]
 
     caption = (
-        f"👤 **Name:** `{char.get('name', 'Unknown')}`\n"
-        f"📺 **Anime:** `{char.get('anime', 'Unknown')}`\n"
-        f"🆔 **ID:** `{char.get('id', 'N/A')}`\n"
-        f"⭐ **Rarity:** `{rolled_rarity}`\n\n"
+        f"👤 **Name:** `{char.get('name','Unknown')}`\n"
+        f"📺 **Anime:** `{char.get('anime','Unknown')}`\n"
+        f"🆔 **ID:** `{char.get('id','N/A')}`\n"
+        f"⭐ **Rarity:** `{rolled_rarity}`\n"
+        f"🎯 **Success Chance:** `{RARITY_SUCCESS[rolled_rarity]}%`\n\n"
         f"❓ Do you want to **{mode.upper()}**?"
     )
 
     keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "✅ Yes",
-                    callback_data=f"confirm_{mode}_{char.get('id', '0')}"
-                ),
-                InlineKeyboardButton(
-                    "❌ Cancel",
-                    callback_data="cancel_action"
-                )
-            ]
-        ]
+        [[
+            InlineKeyboardButton(
+                "✅ Yes",
+                callback_data=f"confirm_{mode}_{char.get('id','0')}_{rolled_rarity}"
+            ),
+            InlineKeyboardButton(
+                "❌ Cancel",
+                callback_data="cancel_action"
+            )
+        ]]
     )
 
     await message.reply_photo(
@@ -128,24 +132,47 @@ async def propose_cmd(_, message):
 
 @bot.on_callback_query(filters.regex("^confirm_"))
 async def confirm_action(_, cq: CallbackQuery):
-    _, mode, char_id = cq.data.split("_")
+    _, mode, char_id, rarity = cq.data.split("_")
     user_id = cq.from_user.id
     now = datetime.utcnow()
 
     char = await collection.find_one({"id": int(char_id)}) or await collection.find_one({})
-
     if not char:
         return await cq.answer("Character not found.", show_alert=True)
 
+    success_chance = RARITY_SUCCESS.get(rarity, 50)
+    success = random.randint(1, 100) <= success_chance
+
+    # ❌ FAILURE
+    if not success:
+        if mode == "smash":
+            fail_text = (
+                "❌ **Smash Failed!**\n\n"
+                "⚔️ The challenger resisted.\n"
+                "💨 The opportunity slipped away…"
+            )
+        else:
+            fail_text = (
+                "💔 **Proposal Failed**\n\n"
+                "✨ The character was not convinced.\n"
+                "🍀 Better luck next time."
+            )
+
+        await cq.message.edit_caption(fail_text)
+        await cq.answer()
+        return
+
+    # ✅ SUCCESS
     if mode == "smash":
         update = {
             "$push": {"characters": char},
             "$set": {"last_smash_time": now}
         }
         caption = (
-            f"✨ **SMASH SUCCESSFUL!** ✨\n\n"
+            "✨ **SMASH SUCCESSFUL!** ✨\n\n"
             f"👤 **Name:** `{char.get('name')}`\n"
-            f"🆔 **ID:** `{char.get('id', 'N/A')}`\n"
+            f"🆔 **ID:** `{char.get('id','N/A')}`\n"
+            f"⭐ **Rarity:** `{rarity}`\n"
             f"📺 **Anime:** `{char.get('anime')}`"
         )
     else:
@@ -154,20 +181,21 @@ async def confirm_action(_, cq: CallbackQuery):
             "$set": {"last_propose_time": now}
         }
         caption = (
-            f"💖 **Proposal Accepted!** 💖\n\n"
+            "💖 **Proposal Accepted!** 💖\n\n"
             f"👤 **Name:** `{char.get('name')}`\n"
-            f"🆔 **ID:** `{char.get('id', 'N/A')}`\n"
+            f"🆔 **ID:** `{char.get('id','N/A')}`\n"
+            f"⭐ **Rarity:** `{rarity}`\n"
             f"📺 **Anime:** `{char.get('anime')}`\n\n"
-            f"✨ Added to your harem!"
+            "✨ Added to your harem!"
         )
 
     await user_collection.update_one({"id": user_id}, update, upsert=True)
     await cq.message.edit_caption(caption)
-    await cq.answer()
+    await cq.answer("✅ Success!")
 
 
 # ─────────────────────────────
-# CANCEL
+# CANCEL CALLBACK
 # ─────────────────────────────
 
 @bot.on_callback_query(filters.regex("^cancel_action$"))
