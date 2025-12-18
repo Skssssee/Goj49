@@ -4,7 +4,6 @@ import bson
 import os
 from TEAMZYRO import app
 
-# ONLY THIS USER CAN USE
 OWNER_ID = 1334658171
 
 SOURCE_URI = os.getenv("MONGO_URI")
@@ -16,45 +15,75 @@ def calc_size(docs):
     return sum(len(bson.BSON.encode(d)) for d in docs)
 
 
-@app.on_message(filters.command("backupdb") & filters.user(OWNER_ID))
+def check_env():
+    return SOURCE_URI and BACKUP_URI and DB_NAME
+
+
+# ───────── BACKUP (ALL CHATS) ─────────
+@app.on_message(
+    filters.command("backupdb") &
+    filters.user(OWNER_ID)
+)
 async def backup_db(_, message):
+    if not check_env():
+        return await message.reply_text("❌ ENV variables missing")
+
     try:
-        await message.reply_text("⏳ Starting database backup...")
+        await message.reply_text("⏳ Starting database BACKUP...")
 
-        src = MongoClient(SOURCE_URI)[DB_NAME]
-        dst = MongoClient(BACKUP_URI)[DB_NAME]
+        src_db = MongoClient(SOURCE_URI)[DB_NAME]
+        dst_db = MongoClient(BACKUP_URI)[DB_NAME]
 
-        total = 0
-        for col in src.list_collection_names():
-            docs = list(src[col].find())
-            dst[col].delete_many({})
+        total_docs = 0
+        total_bytes = 0
+
+        for col in src_db.list_collection_names():
+            docs = list(src_db[col].find())
+            dst_db[col].delete_many({})
             if docs:
-                dst[col].insert_many(docs)
-                total += calc_size(docs)
+                dst_db[col].insert_many(docs)
+                total_docs += len(docs)
+                total_bytes += calc_size(docs)
 
         await message.reply_text(
-            f"✅ Backup completed!\n📦 Size: `{total/1024:.2f} KB`"
+            "✅ BACKUP COMPLETED\n\n"
+            f"📂 DB: `{DB_NAME}`\n"
+            f"📄 Docs: `{total_docs}`\n"
+            f"💾 Size: `{total_bytes/1024:.2f} KB`"
         )
 
     except Exception as e:
         await message.reply_text(f"❌ Backup failed:\n`{e}`")
 
 
-@app.on_message(filters.command("restoredb") & filters.user(OWNER_ID))
+# ───────── RESTORE (ALL CHATS) ─────────
+@app.on_message(
+    filters.command("restoredb") &
+    filters.user(OWNER_ID)
+)
 async def restore_db(_, message):
+    if not check_env():
+        return await message.reply_text("❌ ENV variables missing")
+
     try:
-        await message.reply_text("⏳ Restoring database...")
+        await message.reply_text("⚠️ Restoring database...")
 
-        src = MongoClient(BACKUP_URI)[DB_NAME]
-        dst = MongoClient(SOURCE_URI)[DB_NAME]
+        src_db = MongoClient(BACKUP_URI)[DB_NAME]
+        dst_db = MongoClient(SOURCE_URI)[DB_NAME]
 
-        for col in src.list_collection_names():
-            docs = list(src[col].find())
-            dst[col].delete_many({})
+        total_docs = 0
+
+        for col in src_db.list_collection_names():
+            docs = list(src_db[col].find())
+            dst_db[col].delete_many({})
             if docs:
-                dst[col].insert_many(docs)
+                dst_db[col].insert_many(docs)
+                total_docs += len(docs)
 
-        await message.reply_text("✅ Restore completed!")
+        await message.reply_text(
+            "✅ RESTORE COMPLETED\n\n"
+            f"📄 Documents restored: `{total_docs}`"
+        )
 
     except Exception as e:
-        await message.reply_text(f"❌ Restore failed:\n`{e}`")
+        await message.reply_text(f"❌ Restore failed:\n`{e}`")l
