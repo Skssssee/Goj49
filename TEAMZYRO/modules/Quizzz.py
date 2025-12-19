@@ -1,89 +1,136 @@
-from pyrogram import filters
-from TEAMZYRO import app, character_collection, user_collection, active_guess_collection
 import random
+from pyrogram import filters
+from TEAMZYRO import app, collection, user_collection
+
+# ─────────────────────────────
+# CONFIG
+# ─────────────────────────────
+
+GUESS_REWARD = 50
 
 RARITIES = [
-    "Low", "Medium", "High", "Special Edition",
-    "Elite Edition", "Exclusive", "Valentine",
-    "Halloween", "Winter", "Summer", "Royal",
+    "Low",
+    "Medium",
+    "High",
+    "Special Edition",
+    "Elite Edition",
+    "Exclusive",
+    "Valentine",
+    "Halloween",
+    "Winter",
+    "Summer",
+    "Royal",
     "Luxury Edition"
 ]
 
-REWARD_COINS = 50
+# rarity weight (chance)
+RARITY_WEIGHT = {
+    "Low": 30,
+    "Medium": 25,
+    "High": 15,
+    "Special Edition": 8,
+    "Elite Edition": 6,
+    "Exclusive": 5,
+    "Valentine": 3,
+    "Halloween": 3,
+    "Winter": 2,
+    "Summer": 2,
+    "Royal": 1,
+    "Luxury Edition": 0.5
+}
 
 
-# 🎯 Start Guess
-@app.on_message(filters.command("guess"))
-async def start_guess(_, message):
-    chat_id = message.chat.id
+# ─────────────────────────────
+# PICK RANDOM CHARACTER
+# ─────────────────────────────
 
-    active = await active_guess_collection.find_one({"chat_id": chat_id})
-    if active:
-        await message.reply_text("❗ Guess already running. Type character name to guess.")
-        return
+async def get_random_character():
+    rarity = random.choices(
+        list(RARITY_WEIGHT.keys()),
+        weights=RARITY_WEIGHT.values(),
+        k=1
+    )[0]
 
-    rarity = random.choice(RARITIES)
-    chars = await character_collection.find({"rarity": rarity}).to_list(length=100)
+    chars = await collection.find(
+        {"rarity": rarity, "img_url": {"$exists": True}}
+    ).to_list(length=100)
 
     if not chars:
-        await message.reply_text("❌ No characters available.")
-        return
+        return None
 
-    char = random.choice(chars)
-
-    await active_guess_collection.insert_one({
-        "chat_id": chat_id,
-        "character_id": char["id"]
-    })
-
-    caption = (
-        f"🎯 **Guess the Character!**\n\n"
-        f"📺 Anime: {char['anime']}\n"
-        f"💎 Rarity: {char['rarity']}\n\n"
-        f"✍️ Type character name"
-    )
-
-    await message.reply_photo(char["img_url"], caption=caption)
+    return random.choice(chars)
 
 
-# 🧠 Handle Guess
-@app.on_message(filters.text & ~filters.command)
-async def handle_guess(_, message):
-    chat_id = message.chat.id
-    text = message.text.strip().lower()
+# ─────────────────────────────
+# /guess COMMAND
+# ─────────────────────────────
 
-    active = await active_guess_collection.find_one({"chat_id": chat_id})
-    if not active:
-        return
+@app.on_message(filters.command("guess"))
+async def guess_cmd(_, message):
+    user_id = message.from_user.id
 
-    char = await character_collection.find_one({"id": active["character_id"]})
-    if not char:
-        return
+    user = await user_collection.find_one({"id": user_id}) or {}
 
-    if text == char["name"].lower():
-        user = await user_collection.find_one({"id": message.from_user.id})
-        if not user:
-            await user_collection.insert_one({
-                "id": message.from_user.id,
-                "coins": REWARD_COINS
-            })
-        else:
-            await user_collection.update_one(
-                {"id": message.from_user.id},
-                {"$inc": {"coins": REWARD_COINS}}
-            )
+    # If already guessing, show same character
+    if user.get("active_guess"):
+        char = user["active_guess"]
+    else:
+        char = await get_random_character()
+        if not char:
+            return await message.reply_text("❌ No characters available.")
 
-        await active_guess_collection.delete_one({"chat_id": chat_id})
-
-        await message.reply_text(
-            f"✅ **Correct!** 🎉\n"
-            f"🏆 {char['name']}\n"
-            f"💰 +{REWARD_COINS} coins\n\n"
-            f"➡️ New guess starting..."
+        await user_collection.update_one(
+            {"id": user_id},
+            {"$set": {"active_guess": char}},
+            upsert=True
         )
 
-        # Auto start next guess
-        await start_guess(_, message)
+    caption = (
+        "❓ **GUESS THE CHARACTER**\n\n"
+        f"🎴 **Rarity:** `{char['rarity']}`\n"
+        "✍️ Reply with the character name"
+    )
 
-    else:
-        await message.reply_text("❌ Wrong guess! Try again 😈")
+    await message.reply_photo(
+        photo=char["img_url"],
+        caption=caption
+    )
+
+
+# ─────────────────────────────
+# GUESS ANSWER HANDLER
+# ─────────────────────────────
+
+@app.on_message(filters.text & ~filters.command)
+async def guess_answer(_, message):
+    user_id = message.from_user.id
+    guess = message.text.strip().lower()
+
+    user = await user_collection.find_one({"id": user_id})
+    if not user or not user.get("active_guess"):
+        return
+
+    char = user["active_guess"]
+    correct = char["name"].strip().lower()
+
+    # ❌ WRONG GUESS
+    if guess != correct:
+        return await message.reply_text("❌ Wrong guess! Try again.")
+
+    # ✅ CORRECT GUESS
+    await user_collection.update_one(
+        {"id": user_id},
+        {
+            "$inc": {"coins": GUESS_REWARD},
+            "$unset": {"active_guess": ""}
+        }
+    )
+
+    await message.reply_text(
+        f"🎉 **Correct!**\n\n"
+        f"🧩 `{char['name']}` guessed successfully!\n"
+        f"💰 +{GUESS_REWARD} coins earned"
+    )
+
+    # Auto show next character
+    await guess_cmd(_, message)
