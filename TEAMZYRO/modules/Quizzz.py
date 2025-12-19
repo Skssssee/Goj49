@@ -24,12 +24,7 @@ async def get_random_character():
     rarity = random.choice(RARITIES)
 
     chars = await collection.aggregate([
-        {
-            "$match": {
-                "rarity": rarity,
-                "img_url": {"$exists": True, "$ne": ""}
-            }
-        },
+        {"$match": {"rarity": rarity}},
         {"$sample": {"size": 1}}
     ]).to_list(1)
 
@@ -59,18 +54,18 @@ async def guess_cmd(_, message):
 
     await message.reply_photo(
         photo=char["img_url"],
-        caption=(
-            "🎯 **GUESS THE CHARACTER**\n\n"
-            f"⭐ Rarity: **{char['rarity']}**\n"
-            "✍️ Type character name"
-        )
+        caption=f"🎯 Guess this character\n⭐ Rarity: {char['rarity']}"
     )
 
 
 # ───────────── ANSWER HANDLER ─────────────
+# ⚠️ NO ~filters.command HERE
 
-@app.on_message(filters.text & ~filters.command)
+@app.on_message(filters.text)
 async def answer_handler(_, message):
+    if message.text.startswith("/"):
+        return  # ignore commands safely
+
     user_id = message.from_user.id
     answer = message.text.strip().lower()
 
@@ -79,10 +74,11 @@ async def answer_handler(_, message):
         return
 
     char = user["active_guess"]
+
     if answer != char["name"].lower():
         return await message.reply_text("❌ Wrong guess, try again.")
 
-    # Correct
+    # ✅ Correct
     await user_collection.update_one(
         {"id": user_id},
         {
@@ -92,12 +88,12 @@ async def answer_handler(_, message):
     )
 
     await message.reply_text(
-        f"🎉 **Correct!**\n"
-        f"🧩 `{char['name']}`\n"
+        f"🎉 Correct!\n"
+        f"🧩 {char['name']}\n"
         f"💰 +{REWARD_COINS} coins"
     )
 
-    # Next guess
+    # Next character
     next_char = await get_random_character()
     if not next_char:
         return
@@ -109,9 +105,5 @@ async def answer_handler(_, message):
 
     await message.reply_photo(
         photo=next_char["img_url"],
-        caption=(
-            "🎯 **NEXT GUESS**\n\n"
-            f"⭐ Rarity: **{next_char['rarity']}**\n"
-            "✍️ Guess the name"
-        )
+        caption=f"🎯 Next Guess\n⭐ Rarity: {next_char['rarity']}"
     )
