@@ -1,38 +1,17 @@
 import random
-from pyrogram import filters, enums
-from TEAMZYRO import app, collection, user_collection
+from pyrogram import filters
+from TEAMZYRO import app, user_collection, collection
 
-# ---------------- CONFIG ---------------- #
-
-RARITY_MAP = {
-    1: "⚪️ Low",
-    2: "🟠 Medium",
-    3: "🔴 High",
-    4: "🎩 Special Edition",
-    5: "🪽 Elite Edition",
-    6: "🪐 Exclusive",
-    7: "💞 Valentine",
-    8: "🎃 Halloween",
-    9: "❄️ Winter",
-    10: "🏖 Summer",
-    11: "🎗 Royal",
-    12: "💸 Luxury Edition"
-}
 
 REWARD_COINS = 50
 
-# ---------------- UTILS ---------------- #
 
-async def get_random_character_by_rarity():
-    """
-    Pick random rarity → then random character of that rarity
-    """
-
-    rarity_value = random.choice(list(RARITY_MAP.values()))
-
+# ─────────────────────────────
+# HELPER: RANDOM CHARACTER
+# ─────────────────────────────
+async def get_random_character():
     chars = await collection.find(
         {
-            "rarity": rarity_value,
             "$or": [
                 {"img_url": {"$exists": True, "$ne": ""}},
                 {"vid_url": {"$exists": True, "$ne": ""}}
@@ -45,32 +24,47 @@ async def get_random_character_by_rarity():
 
     return random.choice(chars)
 
-# ---------------- COMMAND ---------------- #
 
+# ─────────────────────────────
+# /guess COMMAND
+# ─────────────────────────────
 @app.on_message(filters.command("guess"))
 async def guess_cmd(client, message):
+    user_id = message.from_user.id
 
-    char = await get_random_character_by_rarity()
+    user = await user_collection.find_one({"id": user_id}) or {}
+
+    # अगर पहले से guess pending है
+    if user.get("current_guess"):
+        await message.reply_text(
+            "⚠️ **You already have a pending guess!**\n"
+            "❓ Guess the current character first."
+        )
+        return
+
+    char = await get_random_character()
 
     if not char:
         await message.reply_text("❌ No characters available.")
         return
 
+    rarity = char.get("rarity", "Unknown")
+
     caption = (
         "🎯 **Guess The Character!**\n\n"
-        f"⭐ **Rarity:** {char.get('rarity','Unknown')}\n"
-        "🧠 Type the character name to guess!\n\n"
-        "🎁 Reward: **50 Coins**"
+        f"⭐ **Rarity:** {rarity}\n"
+        "🧠 Send the character name to guess\n\n"
+        f"🎁 Reward: **{REWARD_COINS} Coins**"
     )
 
-    # Save current guess (important)
+    # save current guess
     await user_collection.update_one(
-        {"id": message.from_user.id},
+        {"id": user_id},
         {
             "$set": {
                 "current_guess": {
                     "id": char["id"],
-                    "answer": char["name"]
+                    "answer": char["name"].lower()
                 }
             }
         },
@@ -78,14 +72,44 @@ async def guess_cmd(client, message):
     )
 
     if char.get("vid_url"):
-        await message.reply_video(
-            char["vid_url"],
-            caption=caption,
-            parse_mode=enums.ParseMode.MARKDOWN
-        )
+        await message.reply_video(char["vid_url"], caption=caption)
     else:
-        await message.reply_photo(
-            char["img_url"],
-            caption=caption,
-            parse_mode=enums.ParseMode.MARKDOWN
-        )
+        await message.reply_photo(char["img_url"], caption=caption)
+
+
+# ─────────────────────────────
+# ANSWER HANDLER
+# ─────────────────────────────
+@app.on_message(filters.text & ~filters.command)
+async def answer_guess(client, message):
+    user_id = message.from_user.id
+    text = message.text.lower().strip()
+
+    user = await user_collection.find_one({"id": user_id})
+    if not user or not user.get("current_guess"):
+        return
+
+    correct_answer = user["current_guess"]["answer"]
+
+    # ❌ WRONG ANSWER
+    if text != correct_answer:
+        await message.reply_text("❌ Wrong guess! Try again.")
+        return
+
+    # ✅ CORRECT ANSWER
+    new_balance = user.get("balance", 0) + REWARD_COINS
+
+    await user_collection.update_one(
+        {"id": user_id},
+        {
+            "$unset": {"current_guess": ""},
+            "$set": {"balance": new_balance}
+        }
+    )
+
+    await message.reply_text(
+        "🎉 **Correct Guess!**\n\n"
+        f"💰 You earned **{REWARD_COINS} coins**\n"
+        f"🏦 New Balance: `{new_balance}`\n\n"
+        "➡️ Use /guess for next character!"
+    )
