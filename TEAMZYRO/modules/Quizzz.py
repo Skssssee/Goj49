@@ -2,42 +2,37 @@ from pyrogram import filters
 from TEAMZYRO import app, character_collection, user_collection, active_guess_collection
 import random
 
-# ─────────────────────────────
-# CONFIG
-# ─────────────────────────────
-
+# ───────── CONFIG ─────────
 RARITIES = ["Low", "Medium", "High"]
-REWARD = 50
+REWARD_COINS = 50
 
 
-# ─────────────────────────────
-# START GUESS
-# ─────────────────────────────
-
+# ───────── START GUESS ─────────
 @app.on_message(filters.command("guess"))
 async def start_guess(_, message):
     chat_id = message.chat.id
 
-    # Check if guess already running
-    if await active_guess_collection.find_one({"chat_id": chat_id}):
-        await message.reply_text("❗ Guess already running in this chat.")
+    # Already running?
+    active = await active_guess_collection.find_one({"chat_id": chat_id})
+    if active:
+        await message.reply_text("❗ Guess already running. Guess the character name!")
         return
 
+    # Pick rarity
     rarity = random.choice(RARITIES)
 
+    # Fetch characters of that rarity
     chars = await character_collection.find(
-        {
-            "rarity": rarity,
-            "img_url": {"$exists": True, "$ne": ""}
-        }
-    ).to_list(length=50)
+        {"rarity": rarity, "img_url": {"$exists": True, "$ne": ""}}
+    ).to_list(length=100)
 
     if not chars:
-        await message.reply_text("❌ No characters found.")
+        await message.reply_text("❌ No characters available.")
         return
 
     char = random.choice(chars)
 
+    # Save active guess
     await active_guess_collection.insert_one({
         "chat_id": chat_id,
         "character_id": char["id"]
@@ -46,43 +41,40 @@ async def start_guess(_, message):
     await message.reply_photo(
         photo=char["img_url"],
         caption=(
-            "🎯 **Guess the Character**\n\n"
+            "🎯 **GUESS THE CHARACTER**\n\n"
             f"📺 Anime: `{char['anime']}`\n"
-            f"💎 Rarity: `{char['rarity']}`\n"
-            f"💰 Reward: `+{REWARD} Coins`\n\n"
-            "✍️ Type the character name"
+            f"💎 Rarity: `{char['rarity']}`\n\n"
+            "✍️ Type the **character name** in chat"
         )
     )
 
 
-# ─────────────────────────────
-# GUESS HANDLER
-# ─────────────────────────────
-
+# ───────── HANDLE ANSWERS ─────────
 @app.on_message(filters.text & ~filters.regex(r"^/"))
-async def guess_handler(_, message):
+async def handle_guess(_, message):
     chat_id = message.chat.id
-    user_id = message.from_user.id
-    guess = message.text.strip().lower()
+    user_guess = message.text.strip().lower()
 
     active = await active_guess_collection.find_one({"chat_id": chat_id})
     if not active:
-        return
+        return  # no guess running
 
     char = await character_collection.find_one({"id": active["character_id"]})
     if not char:
         await active_guess_collection.delete_one({"chat_id": chat_id})
         return
 
-    # ❌ Wrong guess
-    if guess != char["name"].lower():
+    correct_name = char["name"].strip().lower()
+
+    # ❌ WRONG
+    if user_guess != correct_name:
         await message.reply_text("❌ Wrong guess! Try again.")
         return
 
-    # ✅ Correct guess
+    # ✅ CORRECT
     await user_collection.update_one(
-        {"id": user_id},
-        {"$inc": {"coins": REWARD}},
+        {"id": message.from_user.id},
+        {"$inc": {"coins": REWARD_COINS}},
         upsert=True
     )
 
@@ -90,11 +82,10 @@ async def guess_handler(_, message):
 
     await message.reply_text(
         f"✅ **Correct Guess!**\n\n"
-        f"👤 {char['name']}\n"
-        f"💎 {char['rarity']}\n"
-        f"💰 +{REWARD} coins\n\n"
-        "➡️ New guess starting..."
+        f"👤 **{char['name']}**\n"
+        f"💰 +{REWARD_COINS} coins\n\n"
+        "🎯 New guess starting..."
     )
 
-    # Auto start new guess
+    # Start new round
     await start_guess(_, message)
