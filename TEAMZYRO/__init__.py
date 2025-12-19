@@ -1,6 +1,6 @@
 from pyrogram import Client
 from pymongo import MongoClient 
-
+import os 
 # BOT
 app = Client(
     "TEAMZYRO",
