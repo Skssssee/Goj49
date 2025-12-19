@@ -1,14 +1,13 @@
-import random
 from pyrogram import filters
-from TEAMZYRO import app, user_collection, collection
-
+from TEAMZYRO import app, character_collection, user_collection, active_guess_collection
+import random
 
 # ─────────────────────────────
 # CONFIG
 # ─────────────────────────────
 
-ALLOWED_RARITIES = ["Low", "Medium", "High"]
-REWARD_COINS = 50
+RARITIES = ["Low", "Medium", "High"]
+REWARD = 50
 
 
 # ─────────────────────────────
@@ -17,85 +16,85 @@ REWARD_COINS = 50
 
 @app.on_message(filters.command("guess"))
 async def start_guess(_, message):
-    user_id = message.from_user.id
+    chat_id = message.chat.id
 
-    # random rarity
-    rarity = random.choice(ALLOWED_RARITIES)
+    # Check if guess already running
+    if await active_guess_collection.find_one({"chat_id": chat_id}):
+        await message.reply_text("❗ Guess already running in this chat.")
+        return
 
-    # fetch character from DB
-    char = await collection.find_one(
+    rarity = random.choice(RARITIES)
+
+    chars = await character_collection.find(
         {
             "rarity": rarity,
             "img_url": {"$exists": True, "$ne": ""}
         }
-    )
+    ).to_list(length=50)
 
-    if not char:
-        return await message.reply_text(
-            "❌ character Guess not available."
-        )
+    if not chars:
+        await message.reply_text("❌ No characters found.")
+        return
 
-    # save active guess
-    await user_collection.update_one(
-        {"id": user_id},
-        {"$set": {"active_guess": char}},
-        upsert=True
-    )
+    char = random.choice(chars)
 
-    caption = (
-        f"🎯 **Guess the Character**\n\n"
-        f"⭐ Rarity: `{char['rarity']}`\n"
-        f"🎁 Reward: `+50 Coins`\n\n"
-        f"✍️ Type the character name to guess!"
-    )
+    await active_guess_collection.insert_one({
+        "chat_id": chat_id,
+        "character_id": char["id"]
+    })
 
     await message.reply_photo(
         photo=char["img_url"],
-        caption=caption
+        caption=(
+            "🎯 **Guess the Character**\n\n"
+            f"📺 Anime: `{char['anime']}`\n"
+            f"💎 Rarity: `{char['rarity']}`\n"
+            f"💰 Reward: `+{REWARD} Coins`\n\n"
+            "✍️ Type the character name"
+        )
     )
 
 
 # ─────────────────────────────
-# GUESS HANDLER (NO CRASH)
+# GUESS HANDLER
 # ─────────────────────────────
 
-@app.on_message(filters.text)
+@app.on_message(filters.text & ~filters.regex(r"^/"))
 async def guess_handler(_, message):
-    # ignore commands
-    if message.text.startswith("/"):
-        return
-
+    chat_id = message.chat.id
     user_id = message.from_user.id
-    guess_text = message.text.strip().lower()
+    guess = message.text.strip().lower()
 
-    user = await user_collection.find_one({"id": user_id})
-    if not user or "active_guess" not in user:
+    active = await active_guess_collection.find_one({"chat_id": chat_id})
+    if not active:
         return
 
-    char = user["active_guess"]
-    correct = char["name"].strip().lower()
+    char = await character_collection.find_one({"id": active["character_id"]})
+    if not char:
+        await active_guess_collection.delete_one({"chat_id": chat_id})
+        return
 
-    # ❌ WRONG GUESS
-    if guess_text != correct:
+    # ❌ Wrong guess
+    if guess != char["name"].lower():
         await message.reply_text("❌ Wrong guess! Try again.")
         return
 
-    # ✅ CORRECT GUESS
+    # ✅ Correct guess
     await user_collection.update_one(
         {"id": user_id},
-        {
-            "$inc": {"coins": REWARD_COINS},
-            "$push": {"characters": char},
-            "$unset": {"active_guess": ""}
-        }
+        {"$inc": {"coins": REWARD}},
+        upsert=True
     )
+
+    await active_guess_collection.delete_one({"chat_id": chat_id})
 
     await message.reply_text(
         f"✅ **Correct Guess!**\n\n"
         f"👤 {char['name']}\n"
-        f"⭐ {char['rarity']}\n"
-        f"💰 +{REWARD_COINS} Coins"
+        f"💎 {char['rarity']}\n"
+        f"💰 +{REWARD} coins\n\n"
+        "➡️ New guess starting..."
     )
 
-    # auto start next guess
+    # Auto start new guess
     await start_guess(_, message)
