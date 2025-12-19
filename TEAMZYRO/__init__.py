@@ -1,3 +1,23 @@
+from pyrogram import Client
+from pymongo import MongoClient 
+
+# BOT
+app = Client(
+    "TEAMZYRO",
+    api_id=int(os.getenv("API_ID")),
+    api_hash=os.getenv("API_HASH"),
+    bot_token=os.getenv("BOT_TOKEN")
+)
+
+# DATABASE
+mongo = MongoClient(os.getenv("MONGO_URI"))
+db = mongo[os.getenv("DB_NAME", "waifu_bot")]
+
+# COLLECTIONS (IMPORTANT)
+character_collection = db.characters
+user_collection = db.users
+active_guess_collection = db.active_guesses
+
 # ------------------------------ IMPORTS ---------------------------------
 import logging
 import os
