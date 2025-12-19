@@ -1,36 +1,42 @@
-
 import random
-from html import escape
-from pyrogram import filters
-from pyrogram.enums import ParseMode
+from pyrogram import filters, enums
 from TEAMZYRO import app, collection, user_collection
 
-# ───────── CONFIG ─────────
+# ---------------- CONFIG ---------------- #
+
+RARITY_MAP = {
+    1: "⚪️ Low",
+    2: "🟠 Medium",
+    3: "🔴 High",
+    4: "🎩 Special Edition",
+    5: "🪽 Elite Edition",
+    6: "🪐 Exclusive",
+    7: "💞 Valentine",
+    8: "🎃 Halloween",
+    9: "❄️ Winter",
+    10: "🏖 Summer",
+    11: "🎗 Royal",
+    12: "💸 Luxury Edition"
+}
 
 REWARD_COINS = 50
 
-RARITY_MAP = {
-    "⚪️ Low",
-    "🟠 Medium",
-    "🔴 High",
-    "🎩 Special Edition",
-    "🪽 Elite Edition",
-    "🪐 Exclusive",
-    "💞 Valentine",
-    "🎃 Halloween",
-    "❄️ Winter",
-    "🏖 Summer",
-    "🎗 Royal",
-    "💸 Luxury Edition"
-}
+# ---------------- UTILS ---------------- #
 
-# ───────── HELPERS ─────────
+async def get_random_character_by_rarity():
+    """
+    Pick random rarity → then random character of that rarity
+    """
 
-async def get_random_character():
+    rarity_value = random.choice(list(RARITY_MAP.values()))
+
     chars = await collection.find(
         {
-            "rarity": {"$in": list(RARITY_MAP)},
-            "img_url": {"$exists": True, "$ne": ""}
+            "rarity": rarity_value,
+            "$or": [
+                {"img_url": {"$exists": True, "$ne": ""}},
+                {"vid_url": {"$exists": True, "$ne": ""}}
+            ]
         }
     ).to_list(length=500)
 
@@ -39,103 +45,47 @@ async def get_random_character():
 
     return random.choice(chars)
 
-
-# ───────── /guess COMMAND ─────────
+# ---------------- COMMAND ---------------- #
 
 @app.on_message(filters.command("guess"))
-async def guess_cmd(_, message):
-    user_id = message.from_user.id
+async def guess_cmd(client, message):
 
-    char = await get_random_character()
+    char = await get_random_character_by_rarity()
+
     if not char:
-        return await message.reply_text("❌ No characters available.")
+        await message.reply_text("❌ No characters available.")
+        return
 
-    # Save active guess
+    caption = (
+        "🎯 **Guess The Character!**\n\n"
+        f"⭐ **Rarity:** {char.get('rarity','Unknown')}\n"
+        "🧠 Type the character name to guess!\n\n"
+        "🎁 Reward: **50 Coins**"
+    )
+
+    # Save current guess (important)
     await user_collection.update_one(
-        {"id": user_id},
+        {"id": message.from_user.id},
         {
             "$set": {
-                "active_guess": {
+                "current_guess": {
                     "id": char["id"],
-                    "name": char["name"].lower()
+                    "answer": char["name"]
                 }
             }
         },
         upsert=True
     )
 
-    rarity = char.get("rarity", "Unknown")
-
-    caption = (
-        "🎯 <b>GUESS THE CHARACTER!</b>\n\n"
-        f"💎 <b>Rarity:</b> <code>{escape(rarity)}</code>\n\n"
-        "✍️ Type your answer:\n"
-        "<code>/answer character_name</code>"
-    )
-
-    await message.reply_photo(
-        photo=char["img_url"],
-        caption=caption,
-        parse_mode=ParseMode.HTML
-    )
-
-
-# ───────── /answer COMMAND ─────────
-
-@app.on_message(filters.command("answer"))
-async def answer_cmd(_, message):
-    user_id = message.from_user.id
-    args = message.text.split(maxsplit=1)
-
-    if len(args) < 2:
-        return await message.reply_text("❌ Usage: /answer <character name>")
-
-    answer = args[1].lower().strip()
-
-    user = await user_collection.find_one({"id": user_id})
-    if not user or "active_guess" not in user:
-        return await message.reply_text("❌ No active guess. Use /guess first.")
-
-    active = user["active_guess"]
-
-    if answer != active["name"]:
-        return await message.reply_text("❌ Wrong answer. Try again!")
-
-    # Fetch character
-    char = await collection.find_one({"id": active["id"]})
-    if not char:
-        return await message.reply_text("❌ Character data missing.")
-
-    # Add coins
-    coins = user.get("coins", 0) + REWARD_COINS
-
-    # Update user
-    await user_collection.update_one(
-        {"id": user_id},
-        {
-            "$set": {
-                "coins": coins,
-                "active_guess": None
-            },
-            "$push": {
-                "characters": char
-            }
-        }
-    )
-
-    rarity = char.get("rarity", "Unknown")
-
-    success_text = (
-        "✨ <b>CORRECT GUESS!</b> ✨\n\n"
-        f"👤 <b>{escape(char['name'])}</b>\n"
-        f"📺 <b>Anime:</b> {escape(char.get('anime','Unknown'))}\n"
-        f"💎 <b>Rarity:</b> <code>{escape(rarity)}</code>\n\n"
-        f"💰 <b>+{REWARD_COINS} coins earned!</b>\n"
-        f"🏦 <b>Total Coins:</b> <code>{coins}</code>\n\n"
-        "➡️ Use /guess for next character!"
-    )
-
-    await message.reply_text(
-        success_text,
-        parse_mode=ParseMode.HTML
-    )
+    if char.get("vid_url"):
+        await message.reply_video(
+            char["vid_url"],
+            caption=caption,
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
+    else:
+        await message.reply_photo(
+            char["img_url"],
+            caption=caption,
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
