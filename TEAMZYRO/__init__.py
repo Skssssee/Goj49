@@ -31,7 +31,7 @@ TOKEN = os.getenv("TOKEN", "8092720888:AAGdYNEUDOmGkPONuvO_YQ_ywdWly5INT2s")
 GLOG = os.getenv("GLOG", "gojo_waifu")
 CHARA_CHANNEL_ID = os.getenv("CHARA_CHANNEL_ID", "gojo_waifu")
 SUPPORT_CHAT_ID = os.getenv("SUPPORT_CHAT_ID", "-1002792716047")
-mongo_url = os.getenv("MONGO_URL", "mongodb+srv://Gojowaifu:waifu123@gojowaifu.royysxq.mongodb.net/?retryWrites=true&w=majority&appName=Gojowaifu")
+mongo_url = os.getenv("MONGO_URL", "mongodb+srv://sk5400552:shjjkytdcghhudd@cluster0g.kbllv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0g")
 
 MUSJ_JOIN = os.getenv("MUSJ_JOIN", "https://t.me/+8KU5ZDxvZyw0N2U1")
 
