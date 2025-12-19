@@ -2,74 +2,85 @@ import random
 from pyrogram import filters
 from TEAMZYRO import app, user_collection, collection
 
-# ===============================
+
+# ─────────────────────────────
 # CONFIG
-# ===============================
+# ─────────────────────────────
 
+ALLOWED_RARITIES = ["Low", "Medium", "High"]
 REWARD_COINS = 50
-RARITIES = ["Low", "Medium", "High"]
 
-# ===============================
-# START GUESS COMMAND
-# ===============================
+
+# ─────────────────────────────
+# START GUESS
+# ─────────────────────────────
 
 @app.on_message(filters.command("guess"))
 async def start_guess(_, message):
     user_id = message.from_user.id
 
-    # Pick random character from DB (Low / Medium / High only)
-    char = await collection.aggregate([
-        {"$match": {
-            "rarity": {"$in": RARITIES},
+    # random rarity
+    rarity = random.choice(ALLOWED_RARITIES)
+
+    # fetch character from DB
+    char = await collection.find_one(
+        {
+            "rarity": rarity,
             "img_url": {"$exists": True, "$ne": ""}
-        }},
-        {"$sample": {"size": 1}}
-    ]).to_list(1)
+        }
+    )
 
     if not char:
-        return await message.reply_text("❌ Character Guess not available.")
+        return await message.reply_text(
+            "❌ character Guess not available."
+        )
 
-    char = char[0]
-
-    # Save active guess
+    # save active guess
     await user_collection.update_one(
         {"id": user_id},
         {"$set": {"active_guess": char}},
         upsert=True
     )
 
-    await message.reply_photo(
-        photo=char["img_url"],
-        caption=(
-            "🎯 **Guess the Character!**\n\n"
-            f"⭐ Rarity: `{char['rarity']}`\n"
-            "✍️ Type the character name to guess\n\n"
-            "💰 Reward: **50 Coins**"
-        )
+    caption = (
+        f"🎯 **Guess the Character**\n\n"
+        f"⭐ Rarity: `{char['rarity']}`\n"
+        f"🎁 Reward: `+50 Coins`\n\n"
+        f"✍️ Type the character name to guess!"
     )
 
-# ===============================
-# GUESS HANDLER (TEXT ONLY)
-# ===============================
+    await message.reply_photo(
+        photo=char["img_url"],
+        caption=caption
+    )
 
-@app.on_message(filters.text & ~filters.command)
+
+# ─────────────────────────────
+# GUESS HANDLER (NO CRASH)
+# ─────────────────────────────
+
+@app.on_message(filters.text)
 async def guess_handler(_, message):
+    # ignore commands
+    if message.text.startswith("/"):
+        return
+
     user_id = message.from_user.id
-    guess = message.text.strip().lower()
+    guess_text = message.text.strip().lower()
 
     user = await user_collection.find_one({"id": user_id})
     if not user or "active_guess" not in user:
         return
 
     char = user["active_guess"]
-    correct_name = char["name"].strip().lower()
+    correct = char["name"].strip().lower()
 
-    # ❌ Wrong guess
-    if guess != correct_name:
-        await message.reply_text("❌ Wrong guess, try again.")
+    # ❌ WRONG GUESS
+    if guess_text != correct:
+        await message.reply_text("❌ Wrong guess! Try again.")
         return
 
-    # ✅ Correct guess
+    # ✅ CORRECT GUESS
     await user_collection.update_one(
         {"id": user_id},
         {
@@ -86,5 +97,5 @@ async def guess_handler(_, message):
         f"💰 +{REWARD_COINS} Coins"
     )
 
-    # Auto start next guess
+    # auto start next guess
     await start_guess(_, message)
