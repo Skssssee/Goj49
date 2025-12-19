@@ -2,10 +2,6 @@ import random
 from pyrogram import filters
 from TEAMZYRO import app, collection, user_collection
 
-# ─────────────────────────────
-# CONFIG
-# ─────────────────────────────
-
 REWARD_COINS = 50
 
 RARITIES = [
@@ -23,40 +19,31 @@ RARITIES = [
     "Luxury Edition"
 ]
 
-# ─────────────────────────────
-# PICK RANDOM CHARACTER BY RARITY
-# ─────────────────────────────
 
 async def get_random_character():
     rarity = random.choice(RARITIES)
 
     chars = await collection.aggregate([
-        {"$match": {
-            "rarity": rarity,
-            "img_url": {"$exists": True, "$ne": ""}
-        }},
+        {
+            "$match": {
+                "rarity": rarity,
+                "img_url": {"$exists": True, "$ne": ""}
+            }
+        },
         {"$sample": {"size": 1}}
     ]).to_list(1)
 
-    if not chars:
-        return None
+    return chars[0] if chars else None
 
-    return chars[0]
 
-# ─────────────────────────────
-# /guess COMMAND
-# ─────────────────────────────
+# ───────────── /guess ─────────────
 
 @app.on_message(filters.command("guess"))
 async def guess_cmd(_, message):
     user_id = message.from_user.id
 
-    user = await user_collection.find_one({"id": user_id}) or {
-        "id": user_id,
-        "coins": 0
-    }
+    user = await user_collection.find_one({"id": user_id}) or {"id": user_id, "coins": 0}
 
-    # Agar already active guess hai → wahi dikhana
     if user.get("active_guess"):
         char = user["active_guess"]
     else:
@@ -75,16 +62,15 @@ async def guess_cmd(_, message):
         caption=(
             "🎯 **GUESS THE CHARACTER**\n\n"
             f"⭐ Rarity: **{char['rarity']}**\n"
-            "✍️ Type the character name"
+            "✍️ Type character name"
         )
     )
 
-# ─────────────────────────────
-# TEXT ANSWER HANDLER
-# ─────────────────────────────
 
-@app.on_message(filters.text & ~filters.command())
-async def handle_guess(_, message):
+# ───────────── ANSWER HANDLER ─────────────
+
+@app.on_message(filters.text & ~filters.command)
+async def answer_handler(_, message):
     user_id = message.from_user.id
     answer = message.text.strip().lower()
 
@@ -93,13 +79,10 @@ async def handle_guess(_, message):
         return
 
     char = user["active_guess"]
-    correct_name = char["name"].strip().lower()
+    if answer != char["name"].lower():
+        return await message.reply_text("❌ Wrong guess, try again.")
 
-    # ❌ WRONG GUESS
-    if answer != correct_name:
-        return await message.reply_text("❌ Wrong guess! Try again.")
-
-    # ✅ CORRECT GUESS
+    # Correct
     await user_collection.update_one(
         {"id": user_id},
         {
@@ -109,12 +92,12 @@ async def handle_guess(_, message):
     )
 
     await message.reply_text(
-        f"🎉 **Correct!**\n\n"
+        f"🎉 **Correct!**\n"
         f"🧩 `{char['name']}`\n"
         f"💰 +{REWARD_COINS} coins"
     )
 
-    # Auto next guess
+    # Next guess
     next_char = await get_random_character()
     if not next_char:
         return
@@ -129,6 +112,6 @@ async def handle_guess(_, message):
         caption=(
             "🎯 **NEXT GUESS**\n\n"
             f"⭐ Rarity: **{next_char['rarity']}**\n"
-            "✍️ Guess the character name"
+            "✍️ Guess the name"
         )
     )
